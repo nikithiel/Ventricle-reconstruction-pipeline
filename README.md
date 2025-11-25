@@ -11,25 +11,24 @@ Use - https://www.youtube.com/watch?v=0sduwcDeSm8
 Downstream CFD simulations - https://www.youtube.com/watch?v=C1O20YvkCJs
 
 # Installation
-Installation-video: https://www.youtube.com/watch?v=cKEKuLW4oYE
+Video walking through installation: https://www.youtube.com/watch?v=cKEKuLW4oYE
 - Install Blender 3.1
-- Install Python
+- Install Python (tested with Python < 3.11.5)
 - Install pip: https://pip.pypa.io/en/stable/installation/
-- Install Python Packages bpy, open3D and numba in console
+- Install Python Packages open3D and numba in console (using virtual environment recommended)
 ```bash
-python.exe -m pip install --upgrade pip
-pip install bpy
-pip install open3d
-pip install numba
+py -3.10 -m venv .venv-blender
+python.exe -m pip install -U pip wheel setuptools
+pip install open3d numba scipy
 ```
 ## Running Blender with Python environment variables
-Windows: Run Powershell
+Windows: Run Powershell or any other terminal \
 Go to the directory of Blender and run it with Python system environment
 ```bash
-cd PATH
+cd <BLENDERPATH>
 ./blender.exe --python-use-system-env
 ```
-## Installation of scipy numba in Blender Python console
+## Deprecated: Installation of scipy numba in Blender Python console
 After opening Blender 3.1 using Powershell load the blend-file provided in the repository. It contains objects used in the addon.
 Open the integrated Blender Python console.
 ```bash
@@ -49,9 +48,9 @@ main(args=['install','scipy'])
 ```
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:
-- Search for looptools and tick the checkbox to install it
-- Install ventricle-reconstruction-pipeline.py from repository and tick the checkbox to install it for the current blend-file
-- After that a new category should appear on the right side of the 3D Viewport called 'GVR-Pipeline'. Clicking it will open panels containing buttons,etc. used for the pipeline.
+- Search *LoopTools* → check *Mesh: LoopTools* → Save Preferences.
+- Install ventricle-reconstruction-pipeline.py from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
+- Open the GVR-Pipeline.blend scene from the repository → after that a new category should appear on the right side of the 3D Viewport called 'GVR-Pipeline'. Clicking it will open panels containing buttons, etc. used for the pipeline.
 # Usage
 Video-tutorial: https://www.youtube.com/watch?v=0sduwcDeSm8 \
 Installation description: https://www.youtube.com/watch?v=cKEKuLW4oYE \
