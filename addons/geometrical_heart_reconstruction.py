@@ -1862,7 +1862,7 @@ class PANEL_Dev_tools(bpy.types.Panel):
         #layout.operator('heart.test', text= "Test function", icon = 'CHECKMARK')
 
 class MESH_OT_export_ventricle(bpy.types.Operator):
-    """Exports ventricle coordinates and connectivity"""
+    """Exports ventricle coordinates, connectivity and STL"""
     bl_idname = 'heart.export_ventricle'
     bl_label = 'Export ventricle'
 
@@ -1870,10 +1870,9 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
         scene = context.scene
         view_layer = context.view_layer
 
-        # --- Remember original selection for STL export and later restore ---
+        # --- Remember original selection & active object, so we can restore them later ---
         original_selection = list(context.selected_objects)
         original_active = view_layer.objects.active
-        selected_meshes_for_stl = [obj for obj in original_selection if obj.type == 'MESH']
 
         def restore_selection():
             bpy.ops.object.select_all(action='DESELECT')
@@ -1887,13 +1886,17 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
             if original_active and original_active.name in view_layer.objects:
                 view_layer.objects.active = view_layer.objects[original_active.name]
 
-        # --- Find ventricles only among the originally selected objects ---
+        # ------------------------------------------------------------------
+        # 1) Find ventricles only among the currently selected objects
+        # ------------------------------------------------------------------
         ventricles = find_ventricle_objects(original_selection)
         if not ventricles:
-            cons_print("Export ventricle: no ventricle_* meshes found in scene.")
+            cons_print("Export ventricle: no ventricle_* meshes found in the current selection.")
             return {'CANCELLED'}
 
-        # --- Temporarily select ventricles for the connectivity check ---
+        # ------------------------------------------------------------------
+        # 2) Node-connectivity check using only these ventricles
+        # ------------------------------------------------------------------
         bpy.ops.object.select_all(action='DESELECT')
         for obj in ventricles:
             obj.select_set(True)
@@ -1905,7 +1908,8 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
             return {'CANCELLED'}
 
         # ------------------------------------------------------------------
-        # Determine export directories: root + subfolders Connectivity / STL
+        # 3) Determine export directories:
+        #    base_dir (for STL + manifest) + Connectivity subfolder
         # ------------------------------------------------------------------
         export_dir_raw = (scene.ventricle_export_dir or "").strip()
         if not export_dir_raw:
@@ -1922,7 +1926,7 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
             return {'CANCELLED'}
 
         # ------------------------------------------------------------------
-        # Export connectivity from the first (reference) ventricle
+        # 4) Export connectivity (faces) from the first ventricle
         # ------------------------------------------------------------------
         ref_obj = ventricles[0]
         mesh = ref_obj.data
@@ -1949,16 +1953,16 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
             return {'CANCELLED'}
 
         # ------------------------------------------------------------------
-        # Export per-frame vertex coordinates for all ventricles
+        # 5) Export per-frame vertex coordinates
+        #    ALWAYS named ventricle_verts_0, ventricle_verts_1, ...
+        #    Also collect data for the manifest.
         # ------------------------------------------------------------------
-        for obj in ventricles:
-            idx = get_ventricle_index_from_name(obj.name)
-            if idx is None:
-                filename = f"{obj.name}_verts.txt"
-            else:
-                filename = f"ventricle_verts_{idx}.txt"
+        manifest_entries = []  # (index, stl_file, verts_file, source_name)
 
-            verts_path = os.path.join(connectivity_dir, filename)
+        for export_index, obj in enumerate(ventricles):
+            verts_filename = f"ventricle_verts_{export_index}.txt"
+            verts_path = os.path.join(connectivity_dir, verts_filename)
+
             try:
                 with open(verts_path, "w") as f:
                     for v in obj.data.vertices:
@@ -1971,28 +1975,52 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
                 restore_selection()
                 return {'CANCELLED'}
 
+            # We'll fill STL file names later, but we already know the pattern.
+            stl_filename = f"ventricle_{export_index}.stl"
+            manifest_entries.append(
+                (export_index, stl_filename, os.path.join("Connectivity", verts_filename), obj.name)
+            )
+
         # ------------------------------------------------------------------
-        # Restore original selection (for user convenience)
+        # 6) Restore original selection (for user convenience)
         # ------------------------------------------------------------------
         restore_selection()
 
         # ------------------------------------------------------------------
-        # Export STL for all originally selected meshes
+        # 7) Export STL for the ventricles
+        #    ALWAYS named ventricle_0.stl, ventricle_1.stl, ...
         # ------------------------------------------------------------------
-        if selected_meshes_for_stl:
-            depsgraph = context.evaluated_depsgraph_get()
-            for obj in selected_meshes_for_stl:
-                safe_name = re.sub(r'[^0-9A-Za-z_]+', '_', obj.name)
-                stl_path = os.path.join(base_dir, f"{safe_name}.stl")
-                export_object_to_stl(obj, stl_path, depsgraph=depsgraph)
+        depsgraph = context.evaluated_depsgraph_get()
+        for export_index, obj in enumerate(ventricles):
+            stl_path = os.path.join(base_dir, f"ventricle_{export_index}.stl")
+            export_object_to_stl(obj, stl_path, depsgraph=depsgraph)
+
+        # ------------------------------------------------------------------
+        # 8) Write manifest file mapping indices to files + original names
+        # ------------------------------------------------------------------
+        manifest_path = os.path.join(base_dir, "ventricle_export_manifest.txt")
+        try:
+            with open(manifest_path, "w") as mf:
+                mf.write("# Ventricle export manifest\n")
+                mf.write("# base directory for STL and this manifest: {}\n".format(base_dir))
+                mf.write("# Connectivity files are in subfolder: {}\n".format(connectivity_dir))
+                mf.write("#\n")
+                mf.write("# index  STL_file            verts_file                         source_object_name\n")
+                for idx, stl_file, verts_file, source_name in manifest_entries:
+                    mf.write(
+                        f"{idx:3d}  {stl_file:18s}  {verts_file:30s}  {source_name}\n"
+                    )
+        except Exception as e:
+            cons_print(f"Export ventricle: error writing manifest file: {e}")
+            # We don't cancel the export here, since STL + verts are already written.
 
         # Single, light console summary line
         cons_print(
-            f"Export ventricle: STL -> '{base_dir}', connectivity -> '{connectivity_dir}'"
+            f"Export ventricle: STL -> '{base_dir}', connectivity -> '{connectivity_dir}', manifest -> '{manifest_path}'"
         )
 
         return {'FINISHED'}
-    
+
 # -------------------------------------------------------------------
 # Helpers for ventricle detection and STL export
 # -------------------------------------------------------------------
@@ -2012,11 +2040,11 @@ def get_ventricle_index_from_name(name: str):
         return int(m.group(1))
     except ValueError:
         return None
-    
+
 def find_ventricle_objects(objs):
     """
     Return list of mesh objects in `objs` whose name ends with '_<digits>',
-    sorted by that numeric index.
+    sorted by that numeric suffix.
     """
     items = []
     for obj in objs:
