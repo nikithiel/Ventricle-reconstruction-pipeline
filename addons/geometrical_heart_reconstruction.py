@@ -1870,9 +1870,10 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
         scene = context.scene
         view_layer = context.view_layer
 
-        # --- Remember original selection & active object, so we can restore them later ---
+        # --- Remember original selection & active object, also which meshes were selected ---
         original_selection = list(context.selected_objects)
         original_active = view_layer.objects.active
+        selected_meshes_for_stl = [obj for obj in original_selection if obj.type == 'MESH']
 
         def restore_selection():
             bpy.ops.object.select_all(action='DESELECT')
@@ -1953,7 +1954,7 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
             return {'CANCELLED'}
 
         # ------------------------------------------------------------------
-        # 5) Export per-frame vertex coordinates
+        # 5) Export per-frame vertex coordinates for ventricles
         #    ALWAYS named ventricle_verts_0, ventricle_verts_1, ...
         #    Also collect data for the manifest.
         # ------------------------------------------------------------------
@@ -1975,7 +1976,6 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
                 restore_selection()
                 return {'CANCELLED'}
 
-            # We'll fill STL file names later, but we already know the pattern.
             stl_filename = f"ventricle_{export_index}.stl"
             manifest_entries.append(
                 (export_index, stl_filename, os.path.join("Connectivity", verts_filename), obj.name)
@@ -1987,16 +1987,26 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
         restore_selection()
 
         # ------------------------------------------------------------------
-        # 7) Export STL for the ventricles
-        #    ALWAYS named ventricle_0.stl, ventricle_1.stl, ...
+        # 7) Export STLs
+        #       - ventricles -> ventricle_0.stl, ventricle_1.stl, ...
+        #       - all other originally selected meshes -> <safe_name>.stl
         # ------------------------------------------------------------------
         depsgraph = context.evaluated_depsgraph_get()
+
+        # 7a) ventricles with canonical names
         for export_index, obj in enumerate(ventricles):
             stl_path = os.path.join(base_dir, f"ventricle_{export_index}.stl")
             export_object_to_stl(obj, stl_path, depsgraph=depsgraph)
 
+        # 7b) other selected meshes (non-ventricles) with their own names
+        other_meshes = [obj for obj in selected_meshes_for_stl if obj not in ventricles]
+        for obj in other_meshes:
+            safe_name = re.sub(r'[^0-9A-Za-z_]+', '_', obj.name)
+            stl_path = os.path.join(base_dir, f"{safe_name}.stl")
+            export_object_to_stl(obj, stl_path, depsgraph=depsgraph)
+
         # ------------------------------------------------------------------
-        # 8) Write manifest file mapping indices to files + original names
+        # 8) Write manifest file mapping ventricle indices to files + original names
         # ------------------------------------------------------------------
         manifest_path = os.path.join(base_dir, "ventricle_export_manifest.txt")
         try:
@@ -2012,7 +2022,7 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
                     )
         except Exception as e:
             cons_print(f"Export ventricle: error writing manifest file: {e}")
-            # We don't cancel the export here, since STL + verts are already written.
+            # Don't cancel export; STLs and verts already written.
 
         # Single, light console summary line
         cons_print(
