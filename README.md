@@ -13,7 +13,7 @@ Downstream CFD simulations - https://www.youtube.com/watch?v=C1O20YvkCJs
 # Installation
 Video walking through installation: https://www.youtube.com/watch?v=cKEKuLW4oYE
 - Install Blender 3.1
-- Install Python (tested with Python < 3.11.5)
+- Install Python (tested with Python 3.12.2)
 - Install pip: https://pip.pypa.io/en/stable/installation/
 - Install Python Packages open3D and numba in console (using virtual environment recommended)
 ```bash
@@ -28,7 +28,7 @@ Go to the directory of Blender and run it with Python system environment
 cd <BLENDERPATH>
 ./blender.exe --python-use-system-env
 ```
-## Deprecated: Installation of scipy numba in Blender Python console
+## Installation of scipy numba in Blender Python console
 After opening Blender 3.1 using Powershell load the blend-file provided in the repository. It contains objects used in the addon.
 Open the integrated Blender Python console.
 ```bash
@@ -37,6 +37,7 @@ import subprocess
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'ensurepip'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'numba'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'scipy'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'open3d'])
 ```
 If pip is missing (Output 0 in Blender Python console):
 ```bash
@@ -45,6 +46,7 @@ ensurepip.bootstrap()
 from pip._internal import main
 main(args=['install','numba'])
 main(args=['install','scipy'])
+main(args=['install','open3d'])
 ```
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:

@@ -178,7 +178,7 @@ class MESH_OT_ventricle_rotate(bpy.types.Operator):
         if not export_dir_raw:
             export_dir_raw = "//"
 
-        base_dir = os.path.normpath(bpy.path.abspath(os.path.join(export_dir_raw,"temp_export")))
+        base_dir = os.path.normpath(bpy.path.abspath(os.path.join(export_dir_raw,"rotated")))
         connectivity_dir = os.path.normpath(os.path.join(base_dir, "Connectivity"))
 
         try:
@@ -1834,6 +1834,40 @@ def test_function(context):
     """Empty test function"""
     cons_print(f"Running test function")
 
+#-----
+
+#PANELS
+
+#-----
+
+class PANEL_Files(bpy.types.Panel):
+    bl_label = "File Management"
+    bl_idname = "PT_File_tools"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'GVR-Pipeline'
+    bl_option = {'DEFAULT_CLOSED'}
+    def draw(self, context):
+        layout = self.layout
+
+        # Import button
+        row = layout.row()
+        layout.operator('heart.import_ventricle', text= "Import ventricles", icon= "IMPORT")
+
+        row = layout.row()
+        row.prop(context.scene, "ventricle_import_dir", text="Import folder")
+        
+        # Quick reset
+        row = layout.row()
+        layout.operator('heart.quick_reset', text="Quick reset", icon="REW")
+
+        # Export button
+        row = layout.row()
+        layout.operator('heart.export_ventricle', text= "Export ventricle", icon = 'EXPORT')
+
+        # Export folder path selector
+        row = layout.row()
+        row.prop(context.scene, "ventricle_export_dir", text="Export folder")
 class PANEL_Position_Ventricle(bpy.types.Panel):
     bl_label = "Ventricle position (mm)"
     bl_idname = "PT_Ventricle"
@@ -1996,7 +2030,7 @@ class PANEL_Dev_tools(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'GVR-Pipeline'
-    bl_option = {'DEFALUT_CLOSED'}
+    bl_option = {'DEFAULT_CLOSED'}
     def draw(self, context):
         layout = self.layout
         row = layout.row()
@@ -2007,26 +2041,6 @@ class PANEL_Dev_tools(bpy.types.Panel):
         layout.operator('heart.dev_check_edges', text= "Get edge index", icon = 'ARROW_LEFTRIGHT')
         row = layout.row()
         layout.operator('heart.dev_check_node_connectivity', text= "Node-connectivity check", icon = 'MOD_PARTICLES') 
-
-        # Quick reset
-        row = layout.row()
-        layout.operator('heart.quick_reset', text="Quick reset", icon="REW")
-
-        # Import button
-        row = layout.row()
-        layout.operator('heart.import_ventricle', text= "Import ventricles", icon= "IMPORT")
-
-        row = layout.row()
-        row.prop(context.scene, "ventricle_import_dir", text="Import folder")
-
-        # Export button
-        row = layout.row()
-        layout.operator('heart.export_ventricle', text= "Export ventricle", icon = 'EXPORT')
-
-        # Export folder path selector
-        row = layout.row()
-        row.prop(context.scene, "ventricle_export_dir", text="Export folder")
-
         # Color minimal distance button
         row = layout.row()
         layout.operator('heart.color_min_dist', text= "Color minimal distance to raw object", icon = 'COLORSET_04_VEC') 
@@ -2047,6 +2061,11 @@ class MESH_OT_quick_reset(bpy.types.Operator):
     def execute(self,context):
         scene = context.scene
         view_layer = context.view_layer
+        
+        import_dir_raw = (scene.ventricle_import_dir or "").strip()
+        if not os.path.isdir(os.path.join(import_dir_raw,'rotated')): 
+            cons_print("No temporary savestate found.")
+            return {'CANCELLED'}
 
         # ------------------------------------------------------------------
         # 1) Wipe the selected vertices
@@ -2079,9 +2098,9 @@ class MESH_OT_quick_reset(bpy.types.Operator):
         import_dir_raw = (scene.ventricle_import_dir or "").strip()
         if not import_dir_raw:
             import_dir_raw = "//"
-        temp_path = os.path.join(import_dir_raw,'temp_export')
+        temp_path = os.path.join(import_dir_raw,'rotated')
         for name in os.listdir(temp_path):
-            if not name=="Connectivity" or name == "ventricle_export_manifest.txt": bpy.ops.import_mesh.stl(filepath=os.path.join(temp_path,name))
+            if not name=="Connectivity" and not name == "ventricle_export_manifest.txt": bpy.ops.import_mesh.stl(filepath=os.path.join(temp_path,name))
         return {'FINISHED'}
 
 class MESH_OT_import_ventricle(bpy.types.Operator):
@@ -2091,12 +2110,11 @@ class MESH_OT_import_ventricle(bpy.types.Operator):
 
     def execute(self,context):
         scene = context.scene
-
-        import_dir_raw = (scene.ventricle_import_dir or "").strip()
+        
         if not import_dir_raw:
             import_dir_raw = "//"
         for name in os.listdir(import_dir_raw):
-            if not name=="temp_export": bpy.ops.import_mesh.stl(filepath=os.path.join(import_dir_raw,name))
+            if not name=="rotated": bpy.ops.import_mesh.stl(filepath=os.path.join(import_dir_raw,name))
         return {'FINISHED'}
 
 class MESH_OT_export_ventricle(bpy.types.Operator):
@@ -2351,7 +2369,7 @@ classes = [
     MESH_OT_export_ventricle, MESH_OT_import_ventricle, MESH_OT_quick_reset,
 ]
 
-dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test]
+dev_classes = [PANEL_Files, PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test]
   
 def register():
     # Position variables.
