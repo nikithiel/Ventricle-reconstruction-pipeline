@@ -1,0 +1,6 @@
+# Ventricle export manifest
+# base directory for STL and this manifest: Y:\Geno_Jayadi_GJA\Ventricle-reconstruction-pipeline\dataset\raw\temp_export
+# Connectivity files are in subfolder: Y:\Geno_Jayadi_GJA\Ventricle-reconstruction-pipeline\dataset\raw\temp_export\Connectivity
+#
+# index  STL_file            verts_file                         source_object_name
+  0  ventricle_0.stl     Connectivity\ventricle_verts_0.txt  ventricle_9

@@ -10,7 +10,6 @@ bl_info = {
     "category" : "Add Mesh",
 }
 # Imports
-from msilib.schema import Icon
 import bpy
 import numba as nb
 import numpy as np
@@ -130,7 +129,169 @@ class MESH_OT_ventricle_rotate(bpy.types.Operator):
     bl_label = 'Rotate Ventricle using the node-coordinates of the basal, apical and septum node.' 
     def execute(self, context): 
         if not rotate_ventricle(context): return{'CANCELLED'}
-        return{'FINISHED'}
+        scene = context.scene
+        view_layer = context.view_layer
+
+        # --- Remember original selection & active object, also which meshes were selected ---
+        original_selection = list(context.selected_objects)
+        original_active = view_layer.objects.active
+        selected_meshes_for_stl = [obj for obj in original_selection if obj.type == 'MESH']
+
+        def restore_selection():
+            bpy.ops.object.select_all(action='DESELECT')
+
+            # Reselect original objects (only if they still exist)
+            for obj in original_selection:
+                if obj and obj.name in view_layer.objects:
+                    view_layer.objects[obj.name].select_set(True)
+
+            # Restore active object if it still exists
+            if original_active and original_active.name in view_layer.objects:
+                view_layer.objects.active = view_layer.objects[original_active.name]
+
+        # ------------------------------------------------------------------
+        # 1) Find ventricles only among the currently selected objects
+        # ------------------------------------------------------------------
+        ventricles = find_ventricle_objects(original_selection)
+        if not ventricles:
+            cons_print("Export ventricle: no ventricle_* meshes found in the current selection.")
+            return {'CANCELLED'}
+
+        # ------------------------------------------------------------------
+        # 2) Node-connectivity check using only these ventricles
+        # ------------------------------------------------------------------
+        bpy.ops.object.select_all(action='DESELECT')
+        for obj in ventricles:
+            obj.select_set(True)
+        view_layer.objects.active = ventricles[0]
+
+        # This prints success message itself if everything is fine
+        if not check_node_connectivity(context):
+            restore_selection()
+            return {'CANCELLED'}
+
+        # ------------------------------------------------------------------
+        # 3) Determine export directories:
+        #    uses whatever is at the import directory as the export directory
+        # ------------------------------------------------------------------
+        export_dir_raw = (scene.ventricle_import_dir or "").strip()
+        if not export_dir_raw:
+            export_dir_raw = "//"
+
+        base_dir = os.path.normpath(bpy.path.abspath(os.path.join(export_dir_raw,"temp_export")))
+        connectivity_dir = os.path.normpath(os.path.join(base_dir, "Connectivity"))
+
+        try:
+            os.makedirs(connectivity_dir, exist_ok=True)
+        except Exception as e:
+            cons_print(f"Export ventricle: cannot create directory '{connectivity_dir}': {e}")
+            restore_selection()
+            return {'CANCELLED'}
+
+        # ------------------------------------------------------------------
+        # 4) Export connectivity (faces) from the first ventricle
+        # ------------------------------------------------------------------
+        ref_obj = ventricles[0]
+        mesh = ref_obj.data
+
+        # Ensure mesh is triangulated (for connectivity consistency)
+        for poly in mesh.polygons:
+            if len(poly.vertices) != 3:
+                cons_print(
+                    f"Export ventricle: non-triangular face {poly.index} in "
+                    f"'{ref_obj.name}'. Please triangulate the mesh first."
+                )
+                restore_selection()
+                return {'CANCELLED'}
+
+        faces_path = os.path.join(connectivity_dir, "ventricle_faces.txt")
+        try:
+            with open(faces_path, "w") as f:
+                for poly in mesh.polygons:
+                    v0, v1, v2 = poly.vertices
+                    f.write(f"{v0} {v1} {v2}\n")
+        except Exception as e:
+            cons_print(f"Export ventricle: error writing faces file: {e}")
+            restore_selection()
+            return {'CANCELLED'}
+
+        # ------------------------------------------------------------------
+        # 5) Export per-frame vertex coordinates for ventricles
+        #    ALWAYS named ventricle_verts_0, ventricle_verts_1, ...
+        #    Also collect data for the manifest.
+        # ------------------------------------------------------------------
+        manifest_entries = []  # (index, stl_file, verts_file, source_name)
+
+        for export_index, obj in enumerate(ventricles):
+            verts_filename = f"ventricle_verts_{export_index}.txt"
+            verts_path = os.path.join(connectivity_dir, verts_filename)
+
+            try:
+                with open(verts_path, "w") as f:
+                    for v in obj.data.vertices:
+                        co_world = obj.matrix_world @ v.co
+                        f.write(f"{co_world.x:.8f} {co_world.y:.8f} {co_world.z:.8f}\n")
+            except Exception as e:
+                cons_print(
+                    f"Export ventricle: error writing vertices for '{obj.name}': {e}"
+                )
+                restore_selection()
+                return {'CANCELLED'}
+
+            stl_filename = f"ventricle_{export_index}.stl"
+            manifest_entries.append(
+                (export_index, stl_filename, os.path.join("Connectivity", verts_filename), obj.name)
+            )
+
+        # ------------------------------------------------------------------
+        # 6) Restore original selection (for user convenience)
+        # ------------------------------------------------------------------
+        restore_selection()
+
+        # ------------------------------------------------------------------
+        # 7) Export STLs
+        #       - ventricles -> ventricle_0.stl, ventricle_1.stl, ...
+        #       - all other originally selected meshes -> <safe_name>.stl
+        # ------------------------------------------------------------------
+        depsgraph = context.evaluated_depsgraph_get()
+
+        # 7a) ventricles with canonical names
+        for export_index, obj in enumerate(ventricles):
+            stl_path = os.path.join(base_dir, f"ventricle_{export_index}.stl")
+            export_object_to_stl(obj, stl_path, depsgraph=depsgraph)
+
+        # 7b) other selected meshes (non-ventricles) with their own names
+        other_meshes = [obj for obj in selected_meshes_for_stl if obj not in ventricles]
+        for obj in other_meshes:
+            safe_name = re.sub(r'[^0-9A-Za-z_]+', '_', obj.name)
+            stl_path = os.path.join(base_dir, f"{safe_name}.stl")
+            export_object_to_stl(obj, stl_path, depsgraph=depsgraph)
+
+        # ------------------------------------------------------------------
+        # 8) Write manifest file mapping ventricle indices to files + original names
+        # ------------------------------------------------------------------
+        manifest_path = os.path.join(base_dir, "ventricle_export_manifest.txt")
+        try:
+            with open(manifest_path, "w") as mf:
+                mf.write("# Ventricle export manifest\n")
+                mf.write("# base directory for STL and this manifest: {}\n".format(base_dir))
+                mf.write("# Connectivity files are in subfolder: {}\n".format(connectivity_dir))
+                mf.write("#\n")
+                mf.write("# index  STL_file            verts_file                         source_object_name\n")
+                for idx, stl_file, verts_file, source_name in manifest_entries:
+                    mf.write(
+                        f"{idx:3d}  {stl_file:18s}  {verts_file:30s}  {source_name}\n"
+                    )
+        except Exception as e:
+            cons_print(f"Export ventricle: error writing manifest file: {e}")
+            # Don't cancel export; STLs and verts already written.
+
+        # Single, light console summary line
+        cons_print(
+            f"Export ventricle: STL -> '{base_dir}', connectivity -> '{connectivity_dir}', manifest -> '{manifest_path}'"
+        )
+
+        return {'FINISHED'}
 
 def rotate_ventricle(context):
     """Rotate ventricle geometry using three points on the ventricle"""
@@ -1846,7 +2007,18 @@ class PANEL_Dev_tools(bpy.types.Panel):
         layout.operator('heart.dev_check_edges', text= "Get edge index", icon = 'ARROW_LEFTRIGHT')
         row = layout.row()
         layout.operator('heart.dev_check_node_connectivity', text= "Node-connectivity check", icon = 'MOD_PARTICLES') 
- 
+
+        # Quick reset
+        row = layout.row()
+        layout.operator('heart.quick_reset', text="Quick reset", icon="REW")
+
+        # Import button
+        row = layout.row()
+        layout.operator('heart.import_ventricle', text= "Import ventricles", icon= "IMPORT")
+
+        row = layout.row()
+        row.prop(context.scene, "ventricle_import_dir", text="Import folder")
+
         # Export button
         row = layout.row()
         layout.operator('heart.export_ventricle', text= "Export ventricle", icon = 'EXPORT')
@@ -1860,6 +2032,71 @@ class PANEL_Dev_tools(bpy.types.Panel):
         layout.operator('heart.color_min_dist', text= "Color minimal distance to raw object", icon = 'COLORSET_04_VEC') 
         #row = layout.row() # New button with test function
         #layout.operator('heart.test', text= "Test function", icon = 'CHECKMARK')
+
+#------
+
+#BUTTONS
+
+
+#----
+class MESH_OT_quick_reset(bpy.types.Operator):
+    """Quickly resets the state and reads the files in the temp folder in the import directory"""
+    bl_idname = 'heart.quick_reset'
+    bl_label = 'Quick reset'
+
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+
+        # ------------------------------------------------------------------
+        # 1) Wipe the selected vertices
+        # ------------------------------------------------------------------
+        # --- Remember original selection & active object, also which meshes were selected ---
+        original_selection = list(context.selected_objects)
+        original_active = view_layer.objects.active
+        selected_meshes_for_stl = [obj for obj in original_selection if obj.type == 'MESH']
+
+        def restore_selection():
+            bpy.ops.object.select_all(action='DESELECT')
+
+            # Reselect original objects (only if they still exist)
+            for obj in original_selection:
+                if obj and obj.name in view_layer.objects:
+                    view_layer.objects[obj.name].select_set(True)
+
+            # Restore active object if it still exists
+            if original_active and original_active.name in view_layer.objects:
+                view_layer.objects.active = view_layer.objects[original_active.name]
+        ventricles = find_ventricle_objects(original_selection)
+        for obj in ventricles:    
+            obj.select_set(True)
+        bpy.ops.object.delete()
+
+        # ------------------------------------------------------------------
+        # 2) Reimport everything
+        # ------------------------------------------------------------------
+        # Reimports after wiping the ventricles
+        import_dir_raw = (scene.ventricle_import_dir or "").strip()
+        if not import_dir_raw:
+            import_dir_raw = "//"
+        for name in os.listdir(import_dir_raw):
+            if not name=="temp_export": bpy.ops.import_mesh.stl(filepath=os.path.join(import_dir_raw,name))
+        return {'FINISHED'}
+
+class MESH_OT_import_ventricle(bpy.types.Operator):
+    """Imports all stl files contained within the import directory (WILL DELETE ANY SELECTED VERTICES)"""
+    bl_idname = 'heart.import_ventricle'
+    bl_label = 'Import ventricle data'
+
+    def execute(self,context):
+        scene = context.scene
+
+        import_dir_raw = (scene.ventricle_import_dir or "").strip()
+        if not import_dir_raw:
+            import_dir_raw = "//"
+        for name in os.listdir(import_dir_raw):
+            if not name=="temp_export": bpy.ops.import_mesh.stl(filepath=os.path.join(import_dir_raw,name))
+        return {'FINISHED'}
 
 class MESH_OT_export_ventricle(bpy.types.Operator):
     """Exports ventricle coordinates, connectivity and STL"""
@@ -2110,7 +2347,7 @@ classes = [
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 
     MESH_OT_Ventricle_Sort, MESH_OT_Quick_Recon, MESH_OT_remove_basal,
     MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,
-    MESH_OT_export_ventricle,
+    MESH_OT_export_ventricle, MESH_OT_import_ventricle, MESH_OT_quick_reset,
 ]
 
 dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test]
@@ -2152,6 +2389,14 @@ def register():
     bpy.types.Scene.max_con_sm_iter = bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min = 5)
     bpy.types.Scene.min_con_sm_iter = bpy.props.IntProperty(name="Minimum smoothing iterations for the smoothing of the connection between basal and apical region", default=2, min = 0)
     bpy.types.Scene.sm_reps = bpy.props.IntProperty(name="Repitions of reselection and smoothing application when smoothing basal and apical region", default=3, min = 0)
+
+    # Import variables.
+    bpy.types.Scene.ventricle_import_dir = bpy.props.StringProperty(
+        name="Import folder",
+        description="Folder to import the ventricle STL dataset",
+        subtype='DIR_PATH',
+        default="//"
+    )
 
     # Export / CFD pipeline variables.
     bpy.types.Scene.ventricle_export_dir = bpy.props.StringProperty(
