@@ -2079,8 +2079,9 @@ class MESH_OT_quick_reset(bpy.types.Operator):
         import_dir_raw = (scene.ventricle_import_dir or "").strip()
         if not import_dir_raw:
             import_dir_raw = "//"
-        for name in os.listdir(import_dir_raw):
-            if not name=="temp_export": bpy.ops.import_mesh.stl(filepath=os.path.join(import_dir_raw,name))
+        temp_path = os.path.join(import_dir_raw,'temp_export')
+        for name in os.listdir(temp_path):
+            if not name=="Connectivity" or name == "ventricle_export_manifest.txt": bpy.ops.import_mesh.stl(filepath=os.path.join(temp_path,name))
         return {'FINISHED'}
 
 class MESH_OT_import_ventricle(bpy.types.Operator):
