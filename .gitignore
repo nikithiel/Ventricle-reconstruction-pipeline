@@ -25,6 +25,9 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*/dataset
+*/temp_export
+*/rotated
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -233,3 +236,6 @@ Icon?
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Personal use
+/vol_plot

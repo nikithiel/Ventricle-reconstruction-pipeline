@@ -13,11 +13,11 @@ Downstream CFD simulations - https://www.youtube.com/watch?v=C1O20YvkCJs
 # Installation
 Video walking through installation: https://www.youtube.com/watch?v=cKEKuLW4oYE
 - Install Blender 3.1
-- Install Python (tested with Python < 3.11.5)
+- Install Python (tested with Python 3.12.2)
 - Install pip: https://pip.pypa.io/en/stable/installation/
 - Install Python Packages open3D and numba in console (using virtual environment recommended)
 ```bash
-py -3.10 -m venv .venv-blender
+py -3.12 -m venv .venv-blender
 python.exe -m pip install -U pip wheel setuptools
 pip install open3d numba scipy
 ```
@@ -28,7 +28,7 @@ Go to the directory of Blender and run it with Python system environment
 cd <BLENDERPATH>
 ./blender.exe --python-use-system-env
 ```
-## Deprecated: Installation of scipy numba in Blender Python console
+## Installation of scipy numba in Blender Python console
 After opening Blender 3.1 using Powershell load the blend-file provided in the repository. It contains objects used in the addon.
 Open the integrated Blender Python console.
 ```bash
@@ -37,6 +37,7 @@ import subprocess
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'ensurepip'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'numba'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'scipy'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'open3d'])
 ```
 If pip is missing (Output 0 in Blender Python console):
 ```bash
@@ -45,6 +46,7 @@ ensurepip.bootstrap()
 from pip._internal import main
 main(args=['install','numba'])
 main(args=['install','scipy'])
+main(args=['install','open3d'])
 ```
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:
@@ -56,16 +58,22 @@ Video-tutorial: https://www.youtube.com/watch?v=0sduwcDeSm8 \
 Installation description: https://www.youtube.com/watch?v=cKEKuLW4oYE \
 → Open blend-file provided in the repository and follow the following steps.
 ## Import ventricle geometries 
-File→Import→.STL→ Select all files (Note that the order is important. Order by name from ventricle_0 ... ventricle_x)\
-Other file formats are also possible. But some formats e.g. wavefront (.obj) have to be imported individually.
+![Image of the import folder](/readme_images/Import.png)
+In the File Panel select an import folder either by manually input or by clicking the folder icon on the right side to browse through the file explorer. 
+Afterwards just click "Import ventricles" to import all the *.STL* files within the selected folder automatically.
 ## Setup pipeline
+![Image of the setup pipeline](/readme_images/Pipeline.png)
+The steps for using this pipeline are indicated by the buttons F1 up to F5. 
+F1 and F5 includes a clickable button for sorting the volumes and selecting the approach respectively. 
 1. Sort volumes\
     1.1. Select all volumes\
     1.2. Click button 'Sort volumes'\
+    ![Image of the setup pipeline](/readme_images/Pipeline_button_one.png)
     \
     This restructures the list of selected objects such that the object with the smallest volume is the first object and all objects that were before that object are concatenated in the original order at the end of the object list. It also changes the names of the objects to the naming convention ventricle 0 ... X.
 2. Setup ventricle position and rotation\
     2.1. Open panel 'Ventricle position (mm)'\
+    ![Image of the Ventricle position panel](/readme_images/Ventricle_position.png)
     2.2. Select only one ventricle and hide the others ('h'-key while selected)\
     2.3. Go into Edit mode\
     2.4. Select a single node centrally in the basal region and press button 'Select basal node' or manually change location of the basal node (before transformation) using the editboxes above the button\
@@ -73,16 +81,18 @@ Other file formats are also possible. But some formats e.g. wavefront (.obj) hav
     2.6. Select a single node at the ventricle septal ventricle wall and press button 'Select node at septum' or manually change location of the septal ventricle node (before transformation) using the editboxes above the button\
     2.7. Leave Edit mode\
     2.8. Unhide all ventricles and reselect them\
-    2.9. Press button 'Translate and rotate'\
+    2.9. Press button 'Translate and rotate'. This will rotate the ventricle and saves the result on a temporary save file named 'rotate' within the same directory as the import directory.\
     \
     Three points are selected on a ventricle to translate and rotate the ventricles. These transformations of the local ventricle coordinate system to a global coordinate system streamline the handling of the ventricle objects in future steps.
 3. Setup valves\
     3.1. Open panel 'Valve options'\
+    ![Image of the Valve options panel](/readme_images/Valve_options.png)
     3.2. Change positition (translation), rotation (angle) and size (radii) of the mitral and aortic valve using the respective textboxes\
     \
     This sets up the arrangement of the mitral and aortic valve. (These inputs can be checked by pressing the buttons 'Add valve interface nodes' and 'Build support structure around valves'. Note that this will add nodes to an existing object. So consider creating a copy before pressing those buttons.)
 4. Setup algorithm variables\
     4.1. Open panel 'Algorithm setup variables'\
+    ![Image of the Algorithm setup variables panel](/readme_images/Algorithm_setup.png)
     4.2. Change variables for the algorithm. Threshold needs to be adjusted depending on geometry. The other settings are advanced and should not be changed lightly.\
     \
     Description variables:
@@ -99,11 +109,13 @@ Other file formats are also possible. But some formats e.g. wavefront (.obj) hav
     - Smoothing repetitions: Used in smoothing the connection of basal and apical region. Amount of smoothing repetitions each with a wider node selection (all neighbours of previous selection are selected)
 5. Select approach\
     5.1. In panel 'Geometric ventricle reconstrucion pipeline press button 'Select approach'\
+    ![Image of the setup pipeline](/readme_images/Pipeline_button_five.png)
     5.2. In pop-up window choose approach from drop-down menu and confirm with 'OK'\
     \
     Change the valve modeling approach.
 ## Run pipeline
 Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline' or do the following steps for a more comprehensive execution of the pipeline:
+![Image of the setup pipeline](/readme_images/Pipeline_optional.png)
 1. Remove basal region\
     1.1. Press button 'Remove basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
@@ -120,7 +132,13 @@ Select all ventricle objects and either run all steps with the button 'Quick rec
     4.1. Press button 'Add atrium, aorta and valves' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
     This copies objects for aorta, atrium, mitral and aortic valve found in the Blender-project and scales, rotates and positions them at their respective places.
+
+## Quick reset
+![Image of the dev tools panel](/readme_images/File_management_quick_reset.png)
+By selecting all objects to delete and pressing quick reset, it will import all the files saved from the last 'Translate and Rotate' process. 
+
 ## Export files
+![Image of the dev tools panel](/readme_images/File_management_export_directory.png)
 Select all files to export in Blender.
 File→Export→.STL→
 - tick ASCII checkbox
@@ -131,6 +149,7 @@ File→Export→.STL→
 →export STL
 - Video on how to use the pipeline in further CFD simulations at https://www.youtube.com/watch?v=C1O20YvkCJs
 ## Optional usage: Development tools panel
+![Image of the dev tools panel](/readme_images/Dev_tools.png)
 ### Compute volumes
 Compute volumes of all selected objects and prints them to the Blender Python console.
 ### Get vertex indices
