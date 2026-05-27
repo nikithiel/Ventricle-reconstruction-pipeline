@@ -20,9 +20,20 @@ import open3d as o3d
 import os
 import re
 
+import matplotlib
+import matplotlib.pyplot as plt
+
+import multiprocessing as mp
+
+try:
+    from stl_plot import check_stl_and_connectivity, parseRunTimeVariables, derive_ed_es_from_volume_curve
+except:
+    print("STL_plot module position is not correct")
 scene = bpy.types.Scene
 
 dev_env_tools = True
+
+plot_settings = os.path.join(os.getcwd(),'addons', 'plot_runtime.txt')
 
 # Generally used functions.
 def cons_print(data):
@@ -2046,6 +2057,19 @@ class PANEL_Dev_tools(bpy.types.Panel):
         # Color minimal distance button
         row = layout.row()
         layout.operator('heart.color_min_dist', text= "Color minimal distance to raw object", icon = 'COLORSET_04_VEC') 
+        
+        # Plot STL setting file
+        row = layout.row()
+        layout.prop(context.scene, "plot_setting_file", text = "Plot input")
+        # Plot STL and display
+        row = layout.row(align=True)
+        row.operator('heart.plot_stl', text = "Display STL plot", icon = 'AXIS_FRONT')
+        row.operator('heart.save_plot_stl', text = 'Save STL plot', icon = 'AXIS_FRONT')
+        
+        # Plot STL path for saving
+        row = layout.row(align=True)
+        row.prop(context.scene, "plot_savepath", text = "Plot folder")
+        row.prop(context.scene, "plot_filename", text = "Plot filename")
         #row = layout.row() # New button with test function
         #layout.operator('heart.test', text= "Test function", icon = 'CHECKMARK')
 
@@ -2289,6 +2313,49 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
 
         return {'FINISHED'}
 
+class MESH_OT_plot_STL(bpy.types.Operator):
+    bl_idname = 'heart.plot_stl'
+    bl_label = 'plot STL files'
+    
+    def execute(self,context):
+        scene = context.scene
+        
+        fig = plt.figure(figsize=(5, 5))
+        x = np.linspace(0, 10, 100)
+        y = np.sin(x)
+        plt.plot(x, y, color='blue', linewidth=2)
+        plt.title("Sine Wave")
+        plt.xlabel("X")
+        plt.ylabel("Y")
+
+        fig.show()
+        
+        return{'FINISHED'}
+    
+class MESH_OT_save_plot_STL(bpy.types.Operator):
+    bl_idname = 'heart.save_plot_stl'
+    bl_label = 'plot STL files'
+    
+    def execute(self,context):
+        scene = context.scene
+        
+        plot_dir_raw = bpy.path.abspath((scene.plot_savepath or "").strip())
+        plot_filename_raw = (scene.plot_filename or "").strip()
+        if not plot_filename_raw:
+            plot_filename_raw = "plot.png"
+        plot_path = os.path.join(plot_dir_raw,plot_filename_raw)
+        
+        fig = plt.figure(figsize=(5, 5))
+        x = np.linspace(0, 10, 100)
+        y = np.sin(x)
+        plt.plot(x, y, color='blue', linewidth=2)
+        plt.title("Sine Wave")
+        plt.xlabel("X")
+        plt.ylabel("Y")
+
+        fig.savefig(plot_path)
+        
+        return{'FINISHED'}
 # -------------------------------------------------------------------
 # Helpers for ventricle detection and STL export
 # -------------------------------------------------------------------
@@ -2370,7 +2437,7 @@ classes = [
     MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,
 ]
 
-dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test]
+dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL]
   
 def register():
     # Position variables.
@@ -2423,6 +2490,29 @@ def register():
         name="Export folder",
         description="Folder to export for ventricle connectivity/coordinates and STL export",
         subtype='DIR_PATH',
+        default="//"
+    )
+    
+    # Plot variables
+    bpy.types.Scene.plot_savepath = bpy.props.StringProperty(
+        name="Plot folder",
+        description="Folder to export the plotted file",
+        subtype='DIR_PATH',
+        default="//"
+    )
+    
+    # Plot variables
+    bpy.types.Scene.plot_filename = bpy.props.StringProperty(
+        name="Plot file name",
+        description="Name of the plot file",
+        subtype='DIR_PATH',
+        default="//"
+    )
+    
+    bpy.types.Scene.plot_setting_file = bpy.props.StringProperty(
+        name = "Setting file for plot",
+        description="Name of the setting file for plot",
+        subtype="DIR_PATH",
         default="//"
     )
 
