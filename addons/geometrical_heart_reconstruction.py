@@ -21,19 +21,18 @@ import os
 import re
 
 import matplotlib
+matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
 
 import multiprocessing as mp
 
-try:
-    from stl_plot import check_stl_and_connectivity, parseRunTimeVariables, derive_ed_es_from_volume_curve
-except:
-    print("STL_plot module position is not correct")
+from pathlib import Path
+
+
+from stl_plot import check_stl_and_connectivity, derive_ed_es_from_volume_curve, parseRunTimeVariables_unique
 scene = bpy.types.Scene
 
 dev_env_tools = True
-
-plot_settings = os.path.join(os.getcwd(),'addons', 'plot_runtime.txt')
 
 # Generally used functions.
 def cons_print(data):
@@ -2060,7 +2059,7 @@ class PANEL_Dev_tools(bpy.types.Panel):
         
         # Plot STL setting file
         row = layout.row()
-        layout.prop(context.scene, "plot_setting_file", text = "Plot input")
+        layout.prop(context.scene, "plot_setting_file", text = "Plot inputs")
         # Plot STL and display
         row = layout.row(align=True)
         row.operator('heart.plot_stl', text = "Display STL plot", icon = 'AXIS_FRONT')
@@ -2320,15 +2319,31 @@ class MESH_OT_plot_STL(bpy.types.Operator):
     def execute(self,context):
         scene = context.scene
         
-        fig = plt.figure(figsize=(5, 5))
-        x = np.linspace(0, 10, 100)
-        y = np.sin(x)
-        plt.plot(x, y, color='blue', linewidth=2)
-        plt.title("Sine Wave")
-        plt.xlabel("X")
-        plt.ylabel("Y")
+        plot_input_dir = bpy.path.abspath((scene.plot_setting_file or "").strip())
+        plot_output_dir = bpy.path.abspath((scene.plot_savepath or "").strip())
+        
+        for filename in os.listdir(plot_input_dir):
+            print(filename)
+            if Path(filename).suffix == ".txt":
+                inputsetting = os.path.join(plot_input_dir,filename)
+                break
+        
+        (
+            correlationFlag,
+            frameID,
+            sFrameID,
+            eFrameID,
+            numFrame,
+            numInter,
+            interpolMethod,
+        ) = parseRunTimeVariables_unique(inputsetting)
 
-        fig.show()
+        # Pre-check STL and connectivity inputs
+        check_stl_and_connectivity(plot_input_dir, numFrame, sFrameID, eFrameID)
+
+        _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_output_dir, interpolMethod, "volume")
+
+        plt.show(block=True)
         
         return{'FINISHED'}
     
@@ -2339,19 +2354,35 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
     def execute(self,context):
         scene = context.scene
         
+        plot_input_dir = bpy.path.abspath((scene.plot_setting_file or "").strip())
+        plot_output_dir = bpy.path.abspath((scene.plot_savepath or "").strip())
+        
+        for filename in os.listdir(plot_input_dir):
+            print(filename)
+            if Path(filename).suffix == ".txt":
+                inputsetting = os.path.join(plot_input_dir,filename)
+                break
+        
+        (
+            correlationFlag,
+            frameID,
+            sFrameID,
+            eFrameID,
+            numFrame,
+            numInter,
+            interpolMethod,
+        ) = parseRunTimeVariables_unique(inputsetting)
+
+        # Pre-check STL and connectivity inputs
+        check_stl_and_connectivity(plot_input_dir, numFrame, sFrameID, eFrameID)
+
+        _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_output_dir, interpolMethod, "volume")
+        
         plot_dir_raw = bpy.path.abspath((scene.plot_savepath or "").strip())
         plot_filename_raw = (scene.plot_filename or "").strip()
         if not plot_filename_raw:
             plot_filename_raw = "plot.png"
         plot_path = os.path.join(plot_dir_raw,plot_filename_raw)
-        
-        fig = plt.figure(figsize=(5, 5))
-        x = np.linspace(0, 10, 100)
-        y = np.sin(x)
-        plt.plot(x, y, color='blue', linewidth=2)
-        plt.title("Sine Wave")
-        plt.xlabel("X")
-        plt.ylabel("Y")
 
         fig.savefig(plot_path)
         

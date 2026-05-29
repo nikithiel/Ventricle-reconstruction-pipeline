@@ -7,17 +7,17 @@ from pathlib import Path
 import numpy as np
 
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
 
 from scipy.interpolate import pchip
 from scipy.interpolate import interp1d
 
 # Borrowed from the other script
-def parseRunTimeVariables():
-    runtimeTree = {}
-    inputpython = os.path.join(os.getcwd(),'inputPython.txt')
-    dictData = dict(np.genfromtxt(inputpython, dtype=str))
+def parseRunTimeVariables_unique(inputpath):
+    runtimeTree = {}        
+    # If no matching files are found, then return exception
+    dictData = dict(np.genfromtxt(inputpath, dtype=str))
 
     print("\n---------------------------------")
     print("---------------------------------")
@@ -82,7 +82,7 @@ def parseRunTimeVariables():
         runtimeTree["interMethod"],
     )
 
-def check_stl_and_connectivity(num_frames, start_frame_id, end_frame_id):
+def check_stl_and_connectivity(inputPath, num_frames, start_frame_id, end_frame_id):
     """
     Pre-check that all necessary STL and connectivity files exist.
 
@@ -96,7 +96,7 @@ def check_stl_and_connectivity(num_frames, start_frame_id, end_frame_id):
     print("\n--- Pre-check: STL & Connectivity files ---")
     errors = []
 
-    stl_dir = os.path.join(os.getcwd(),'STL')
+    stl_dir = inputPath
     if not os.path.isdir(stl_dir):
         errors.append("STL directory '{}' does not exist.".format(stl_dir))
     else:
@@ -150,6 +150,8 @@ def check_stl_and_connectivity(num_frames, start_frame_id, end_frame_id):
         raise RuntimeError("STL/connectivity pre-check failed:\n" + msg)
     else:
         print("STL/connectivity pre-check passed.")
+        
+    return 
 
 # From original script
 def remove_if_exists(p):
@@ -395,8 +397,8 @@ def _first_existing_path(candidates):
             return p
     return None
 
-def _load_faces_connectivity():
-    faces_path = os.path.join(os.getcwd(),"STL", "Connectivity", "ventricle_faces.txt")
+def _load_faces_connectivity(path):
+    faces_path = path
     faces = np.loadtxt(faces_path, dtype=int)
     if faces.ndim == 1:
         faces = faces.reshape(1, -1)
@@ -404,8 +406,8 @@ def _load_faces_connectivity():
         raise RuntimeError(f"Expected triangle faces with 3 indices per row in {faces_path}, got shape {faces.shape}")
     return faces
 
-def _load_verts_connectivity(frame_id):
-    verts_path = os.path.join("STL", "Connectivity", f"ventricle_verts_{frame_id}.txt")
+def _load_verts_connectivity(path,frame_id):
+    verts_path = os.path.join(path,"ventricle_verts_" + str(frame_id) + ".txt")
     verts = np.loadtxt(verts_path)
     if verts.ndim == 1:
         verts = verts.reshape(1, -1)
@@ -426,7 +428,7 @@ def _mesh_volume_mm3(verts, faces):
     vol = np.sum(np.einsum("ij,ij->i", v0, np.cross(v1, v2))) / 6.0
     return float(abs(vol))
 
-def derive_ed_es_from_volume_curve(input_path="inputPython.txt", inter_method=None, out_prefix="volume", usecase = "show"):
+def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_output_dir="", inter_method=None, out_prefix="volume", usecase = "show"):
     """
     Derive ED/ES timings from the ventricle volume curve (from Connectivity mesh).
     - Computes volumes for the N input frames (startFrameID..endFrameID)
@@ -466,14 +468,17 @@ def derive_ed_es_from_volume_curve(input_path="inputPython.txt", inter_method=No
             f"Input mismatch: numberFrames={N} but startFrameID={start_id}, endFrameID={end_id} implies {expected} frames."
         )
 
-    faces = _load_faces_connectivity()
+    facespath = os.path.join(plot_input_dir,"Connectivity","ventricle_faces.txt")
+    print(facespath)
+    faces = _load_faces_connectivity(facespath)
 
+    vertspath = os.path.join(plot_input_dir,"Connectivity")
     # Volumes for original frames
     frame_ids = list(range(start_id, end_id + 1))
     vol_mm3 = []
     verts_frames = []
     for fid in frame_ids:
-        verts = _load_verts_connectivity(fid)
+        verts = _load_verts_connectivity(vertspath,fid)
         verts_frames.append(verts)
         vol_mm3.append(_mesh_volume_mm3(verts, faces))
     vol_mm3 = np.asarray(vol_mm3, dtype=float)
@@ -485,16 +490,13 @@ def derive_ed_es_from_volume_curve(input_path="inputPython.txt", inter_method=No
 
     # Export per-frame volumes
     # Persistent postprocessing output folder in project root (CWD)
-    case_name = Path(os.getcwd()).resolve().name
-    post_dir = Path(os.getcwd()).resolve() / "postprocessing_outputs"
-    post_dir.mkdir(parents=True, exist_ok=True)
-    print("post_dir:", post_dir.resolve())
+    post_dir = plot_output_dir
 
-    csv_path = post_dir / f"{case_name}_{out_prefix}_frames_volumes.csv"
+    csv_path = os.path.join(post_dir,f"_{out_prefix}_frames_volumes.csv")
 
     remove_if_exists(csv_path) # Remove existing file if any
 
-    with open(csv_path, "w", newline="") as f:
+    with open(csv_path, "w+", newline="") as f:
         w = csv.writer(f)
         w.writerow(["frame_i", "frameID", "time_ms", "volume_mL"])
         for i, fid in enumerate(frame_ids):
@@ -587,51 +589,44 @@ def derive_ed_es_from_volume_curve(input_path="inputPython.txt", inter_method=No
         es_source = "from input"
 
     # Export interpolated-step volume curve
-    csv_interp_path = post_dir / f"{case_name}_{out_prefix}_interp_volumes.csv"
+    csv_interp_path = os.path.join(post_dir,f"_{out_prefix}_interp_volumes.csv")
     remove_if_exists(csv_interp_path) # Remove existing file if any
 
-    with open(csv_interp_path, "w", newline="") as f:
+    with open(csv_interp_path, "w+", newline="") as f:
         w = csv.writer(f)
         w.writerow(["step_i", "time_ms", "volume_mL"])
         for i in range(M + 1):
             w.writerow([i, f"{t_interp[i]:.6f}", f"{vol_interp_ml[i]:.6f}"])
 
     # Plot interpolated curve with ED/ES (only the ED/ES that are actually used)
-    fig_path = post_dir / f"{case_name}_{out_prefix}_curve.png"
+    fig_path = os.path.join(post_dir,f"_{out_prefix}_curve.png")
     
-    remove_if_exists(fig_path) # Remove existing file if any
+    #remove_if_exists(fig_path) # Remove existing file if any
 
-    plt.figure()
+    #plt.figure()
+    fig = plt.figure(figsize=(5, 5))
 
-    try:
+    # Interpolated mesh volume (every interpolated time step)
+    plt.plot(t_interp, vol_interp_ml, linewidth=1.5, label="Interpolated frames")
 
-        # Interpolated mesh volume (every interpolated time step)
-        plt.plot(t_interp, vol_interp_ml, linewidth=1.5, label="Interpolated frames")
+    # STL-frame mesh volumes (original frames). Plot them on the same time axis.
+    # Frames are treated as N phase bins over one RR: t_i = i * RR / N (same convention used above).
+    # For visualization, add a wrap-around point at t=RR to show periodic closure.
+    t_frames_plot = np.concatenate([t_frames, [rr_ms]])
+    vol_frames_plot = np.concatenate([vol_ml, [vol_ml[0]]])
+    plt.plot(t_frames_plot, vol_frames_plot, marker="o", linewidth=1.0, label="Original STL frames")
 
-        # STL-frame mesh volumes (original frames). Plot them on the same time axis.
-        # Frames are treated as N phase bins over one RR: t_i = i * RR / N (same convention used above).
-        # For visualization, add a wrap-around point at t=RR to show periodic closure.
-        t_frames_plot = np.concatenate([t_frames, [rr_ms]])
-        vol_frames_plot = np.concatenate([vol_ml, [vol_ml[0]]])
-        plt.plot(t_frames_plot, vol_frames_plot, marker="o", linewidth=1.0, label="Original STL frames")
+    plt.xlabel("Time in ms")
+    plt.ylabel("LV volume in mL")
 
-        plt.xlabel("Time in ms")
-        plt.ylabel("LV volume in mL")
+    ed_color = "C0"
+    es_color = "C1"
+    plt.axvline(ed_ms, color=ed_color, linestyle="-", label=f"ED at {ed_ms:.3f} ms")
+    plt.axvline(es_ms, color=es_color, linestyle="-", label=f"ES at {es_ms:.3f} ms")
 
-        ed_color = "C0"
-        es_color = "C1"
-        plt.axvline(ed_ms, color=ed_color, linestyle="-", label=f"ED at {ed_ms:.3f} ms")
-        plt.axvline(es_ms, color=es_color, linestyle="-", label=f"ES at {es_ms:.3f} ms")
-
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(fig_path, dpi=200)
-
-        if not fig_path.exists():
-            raise RuntimeError(f"Expected plot was not written: {fig_path}")
-
-    finally:
-        plt.close()
+    plt.legend()
+    plt.tight_layout()
+    #fig.show() if usecase == "show" else plt.savefig(fig_path, dpi=200)
 
     diag = {
         "auto_flag": auto_flag,
@@ -656,4 +651,4 @@ def derive_ed_es_from_volume_curve(input_path="inputPython.txt", inter_method=No
         "fig_path": str(fig_path),
     }
 
-    return ed_ms, es_ms, diag
+    return ed_ms, es_ms, diag, fig
