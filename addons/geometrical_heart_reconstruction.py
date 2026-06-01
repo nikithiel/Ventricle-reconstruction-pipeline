@@ -2059,11 +2059,12 @@ class PANEL_Dev_tools(bpy.types.Panel):
         
         # Plot STL setting file
         row = layout.row()
-        layout.prop(context.scene, "plot_setting_file", text = "Plot inputs")
+        row.prop(context.scene, "plot_input_path", text = "Plot inputs")
+        row.prop(context.scene, "plot_input_path2", text = "2nd plot inputs")
         # Plot STL and display
         row = layout.row(align=True)
-        row.operator('heart.plot_stl', text = "Display STL plot", icon = 'AXIS_FRONT')
-        row.operator('heart.save_plot_stl', text = 'Save STL plot', icon = 'AXIS_FRONT')
+        row.operator('heart.plot_stl', text = "Display STL plot(s)", icon = 'AXIS_FRONT')
+        row.operator('heart.save_plot_stl', text = 'Save STL plot(s)', icon = 'AXIS_FRONT')
         
         # Plot STL path for saving
         row = layout.row(align=True)
@@ -2319,7 +2320,8 @@ class MESH_OT_plot_STL(bpy.types.Operator):
     def execute(self,context):
         scene = context.scene
         
-        plot_input_dir = bpy.path.abspath((scene.plot_setting_file or "").strip())
+        plot_input_dir = bpy.path.abspath((scene.plot_input_path or "").strip())
+        plot_input_dir2 = bpy.path.abspath((scene.plot_input_path2 or "").strip())
         plot_output_dir = bpy.path.abspath((scene.plot_savepath or "").strip())
         
         for filename in os.listdir(plot_input_dir):
@@ -2341,7 +2343,7 @@ class MESH_OT_plot_STL(bpy.types.Operator):
         # Pre-check STL and connectivity inputs
         check_stl_and_connectivity(plot_input_dir, numFrame, sFrameID, eFrameID)
 
-        _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_output_dir, interpolMethod, "volume")
+        _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_input_dir2, plot_output_dir, interpolMethod, "volume")
 
         plt.show(block=True)
         
@@ -2354,7 +2356,7 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
     def execute(self,context):
         scene = context.scene
         
-        plot_input_dir = bpy.path.abspath((scene.plot_setting_file or "").strip())
+        plot_input_dir = bpy.path.abspath((scene.plot_input_path or "").strip())
         plot_output_dir = bpy.path.abspath((scene.plot_savepath or "").strip())
         
         for filename in os.listdir(plot_input_dir):
@@ -2540,13 +2542,19 @@ def register():
         default="//"
     )
     
-    bpy.types.Scene.plot_setting_file = bpy.props.StringProperty(
-        name = "Setting file for plot",
-        description="Name of the setting file for plot",
+    bpy.types.Scene.plot_input_path = bpy.props.StringProperty(
+        name = "Input directory for plotting",
+        description="Directory for plotting input",
         subtype="DIR_PATH",
         default="//"
     )
-
+    
+    bpy.types.Scene.plot_input_path2 = bpy.props.StringProperty(
+        name = "Second input directory for plotting comparison",
+        description="2nd directory for plotting input",
+        subtype="DIR_PATH",
+        default="//"
+    )
     # Register UI-classes for Panels and functions.
     for c in classes: bpy.utils.register_class(c)
     # Register Development UI-classes.

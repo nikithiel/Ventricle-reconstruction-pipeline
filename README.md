@@ -38,6 +38,8 @@ subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'ensurepip'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'numba'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'scipy'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'open3d'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'matplotlib'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'PyQt5'])
 ```
 If pip is missing (Output 0 in Blender Python console):
 ```bash
@@ -47,6 +49,8 @@ from pip._internal import main
 main(args=['install','numba'])
 main(args=['install','scipy'])
 main(args=['install','open3d'])
+main(args=['install','matplotlib'])
+main(args=['install','PyQt5'])
 ```
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:

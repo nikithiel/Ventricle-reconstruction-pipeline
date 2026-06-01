@@ -428,7 +428,7 @@ def _mesh_volume_mm3(verts, faces):
     vol = np.sum(np.einsum("ij,ij->i", v0, np.cross(v1, v2))) / 6.0
     return float(abs(vol))
 
-def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_output_dir="", inter_method=None, out_prefix="volume", usecase = "show"):
+def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_dir2="", plot_output_dir="", inter_method=None, out_prefix="volume"):
     """
     Derive ED/ES timings from the ventricle volume curve (from Connectivity mesh).
     - Computes volumes for the N input frames (startFrameID..endFrameID)
@@ -473,6 +473,7 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_output_
     faces = _load_faces_connectivity(facespath)
 
     vertspath = os.path.join(plot_input_dir,"Connectivity")
+    
     # Volumes for original frames
     frame_ids = list(range(start_id, end_id + 1))
     vol_mm3 = []
@@ -487,6 +488,23 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_output_
     # Time axis consistent with periodic cycle of length RR and N frames around the loop
     dt_frame = rr_ms / float(N)
     t_frames = np.arange(N, dtype=float) * dt_frame  # [0, RR) in N bins
+    
+    if plot_input_dir2 != "":
+        facespath2 = os.path.join(plot_input_dir2, "Connectivity", "ventricle_faces.txt")
+        faces = _load_faces_connectivity(facespath2)
+        
+        vertspath2 = os.path.join(plot_input_dir2, "Connectivity")
+        
+        # Volumes for original frames
+        frame_ids = list(range(start_id, end_id + 1))
+        vol_mm3 = []
+        verts_frames = []
+        for fid in frame_ids:
+            verts = _load_verts_connectivity(vertspath,fid)
+            verts_frames.append(verts)
+            vol_mm3.append(_mesh_volume_mm3(verts, faces))
+        vol_mm3 = np.asarray(vol_mm3, dtype=float)
+        vol_ml_2 = vol_mm3 / 1000.0  # mm^3 -> mL
 
     # Export per-frame volumes
     # Persistent postprocessing output folder in project root (CWD)
@@ -600,10 +618,12 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_output_
 
     # Plot interpolated curve with ED/ES (only the ED/ES that are actually used)
     fig_path = os.path.join(post_dir,f"_{out_prefix}_curve.png")
-    
-    #remove_if_exists(fig_path) # Remove existing file if any
 
-    #plt.figure()
+    #-----
+    
+    # START PLOTTING
+    
+    #-----
     fig = plt.figure(figsize=(5, 5))
 
     # Interpolated mesh volume (every interpolated time step)
@@ -614,7 +634,12 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_output_
     # For visualization, add a wrap-around point at t=RR to show periodic closure.
     t_frames_plot = np.concatenate([t_frames, [rr_ms]])
     vol_frames_plot = np.concatenate([vol_ml, [vol_ml[0]]])
+    if plot_input_dir2 != "":
+        vol_frames_plot2 = np.concatenate([vol_ml_2, [vol_ml_2[0]]])
+        # Quick difference check
+        vol_frames_plot2 = vol_frames_plot2 + np.ones_like(vol_frames_plot2)
     plt.plot(t_frames_plot, vol_frames_plot, marker="o", linewidth=1.0, label="Original STL frames")
+    plt.plot(t_frames_plot, vol_frames_plot2, marker="o", linewidth=1.0, label="2nd Original STL frames")
 
     plt.xlabel("Time in ms")
     plt.ylabel("LV volume in mL")
