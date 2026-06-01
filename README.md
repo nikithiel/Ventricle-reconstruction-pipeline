@@ -51,7 +51,7 @@ main(args=['install','open3d'])
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:
 - Search *LoopTools* → check *Mesh: LoopTools* → Save Preferences.
-- Install ventricle-reconstruction-pipeline.py from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
+- Install stl-plot.py and then ventricle-reconstruction-pipeline.py (**in this order**) from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
 - Open the GVR-Pipeline.blend scene from the repository → after that a new category should appear on the right side of the 3D Viewport called 'GVR-Pipeline'. Clicking it will open panels containing buttons, etc. used for the pipeline.
 # Usage
 Video-tutorial: https://www.youtube.com/watch?v=0sduwcDeSm8 \
@@ -135,7 +135,7 @@ Select all ventricle objects and either run all steps with the button 'Quick rec
 
 ## Quick reset
 ![Image of the dev tools panel](/readme_images/File_management_quick_reset.png)
-By selecting all objects to delete and pressing quick reset, it will import all the files saved from the last 'Translate and Rotate' process. 
+By selecting all objects to delete and pressing quick reset, it will import all the files saved from the last 'Translate and Rotate' process. However, it will still use the directory specified in the "Import folder" as a reference point to find the temporary export to quick import.
 
 ## Export files
 ![Image of the dev tools panel](/readme_images/File_management_export_directory.png)
@@ -163,6 +163,12 @@ Check the node-connectivity of all selected objects. This includes:
 - a check if the edges and faces of all objects are created with the same vertices
 ### Color minimal distance to raw object
 During the usage of the pipeline the longitudinal shift is saved as a variable bound to the respective object (ventricle 0 ... X). The user has to re-import the raw data and rename it to 'ref_obj'. While the reconstructed object is selected pressing the button 'Color minimal distance to raw object' will compute the minimal distance from each face-center of the reconstructed ventricle to any face-center of the reference object resulting in a 3d-representation of the Hausdorff distance (https://cgm.cs.mcgill.ca/~godfried/teaching/cg-projects/98/normand/main.html). The faces of the object are then colored with the distances which are normalized with the maximum value resulting in a scale from 0 to 1 (blue→white→red). To view the colors select 'Material Preview' in Blender (top right in 3D Viewport). This process give a qualitative visual representation of the quality of the reconstruction pipeline.
+
+# Plot STL values
+![Image of the plotting functionality](/readme_images/Plot_function.png)
+After exporting the pipeline, the values of the exported STL and it's interpolation can be plotted to visualize the data.
+Click on "Display STL plot" to just display the plot or on "Save STL plot" to save the STL plot as the **specified name** alongside other relevant files into the **specified path**.
+
 # Authors and acknowledgment
 - Author: Daniel Verhülsdonk
 - Supervision by: Jan-Niklas Thiel (thiel@ame.rwth-aachen.de) and Michael Neidlin
