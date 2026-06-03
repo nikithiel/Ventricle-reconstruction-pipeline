@@ -38,6 +38,8 @@ subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'ensurepip'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'numba'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'scipy'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'open3d'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'matplotlib'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'PyQt5'])
 ```
 If pip is missing (Output 0 in Blender Python console):
 ```bash
@@ -47,22 +49,24 @@ from pip._internal import main
 main(args=['install','numba'])
 main(args=['install','scipy'])
 main(args=['install','open3d'])
+main(args=['install','matplotlib'])
+main(args=['install','PyQt5'])
 ```
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:
 - Search *LoopTools* → check *Mesh: LoopTools* → Save Preferences.
-- Install ventricle-reconstruction-pipeline.py from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
+- Install stl-plot.py and then ventricle-reconstruction-pipeline.py (**in this order**) from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
 - Open the GVR-Pipeline.blend scene from the repository → after that a new category should appear on the right side of the 3D Viewport called 'GVR-Pipeline'. Clicking it will open panels containing buttons, etc. used for the pipeline.
 # Usage
 Video-tutorial: https://www.youtube.com/watch?v=0sduwcDeSm8 \
 Installation description: https://www.youtube.com/watch?v=cKEKuLW4oYE \
 → Open blend-file provided in the repository and follow the following steps.
 ## Import ventricle geometries 
-![Image of the import folder](/readme_images/Import.png)
+![Image of the import folder](/readme_images/Import.png)\
 In the File Panel select an import folder either by manually input or by clicking the folder icon on the right side to browse through the file explorer. 
 Afterwards just click "Import ventricles" to import all the *.STL* files within the selected folder automatically.
 ## Setup pipeline
-![Image of the setup pipeline](/readme_images/Pipeline.png)
+![Image of the setup pipeline](/readme_images/Pipeline.png)\
 The steps for using this pipeline are indicated by the buttons F1 up to F5. 
 F1 and F5 includes a clickable button for sorting the volumes and selecting the approach respectively. 
 1. Sort volumes\
@@ -73,7 +77,7 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     This restructures the list of selected objects such that the object with the smallest volume is the first object and all objects that were before that object are concatenated in the original order at the end of the object list. It also changes the names of the objects to the naming convention ventricle 0 ... X.
 2. Setup ventricle position and rotation\
     2.1. Open panel 'Ventricle position (mm)'\
-    ![Image of the Ventricle position panel](/readme_images/Ventricle_position.png)
+    ![Image of the Ventricle position panel](/readme_images/Ventricle_position.png)\
     2.2. Select only one ventricle and hide the others ('h'-key while selected)\
     2.3. Go into Edit mode\
     2.4. Select a single node centrally in the basal region and press button 'Select basal node' or manually change location of the basal node (before transformation) using the editboxes above the button\
@@ -86,13 +90,13 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     Three points are selected on a ventricle to translate and rotate the ventricles. These transformations of the local ventricle coordinate system to a global coordinate system streamline the handling of the ventricle objects in future steps.
 3. Setup valves\
     3.1. Open panel 'Valve options'\
-    ![Image of the Valve options panel](/readme_images/Valve_options.png)
+    ![Image of the Valve options panel](/readme_images/Valve_options.png)\
     3.2. Change positition (translation), rotation (angle) and size (radii) of the mitral and aortic valve using the respective textboxes\
     \
     This sets up the arrangement of the mitral and aortic valve. (These inputs can be checked by pressing the buttons 'Add valve interface nodes' and 'Build support structure around valves'. Note that this will add nodes to an existing object. So consider creating a copy before pressing those buttons.)
 4. Setup algorithm variables\
     4.1. Open panel 'Algorithm setup variables'\
-    ![Image of the Algorithm setup variables panel](/readme_images/Algorithm_setup.png)
+    ![Image of the Algorithm setup variables panel](/readme_images/Algorithm_setup.png)\
     4.2. Change variables for the algorithm. Threshold needs to be adjusted depending on geometry. The other settings are advanced and should not be changed lightly.\
     \
     Description variables:
@@ -109,12 +113,12 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     - Smoothing repetitions: Used in smoothing the connection of basal and apical region. Amount of smoothing repetitions each with a wider node selection (all neighbours of previous selection are selected)
 5. Select approach\
     5.1. In panel 'Geometric ventricle reconstrucion pipeline press button 'Select approach'\
-    ![Image of the setup pipeline](/readme_images/Pipeline_button_five.png)
+    ![Image of the setup pipeline](/readme_images/Pipeline_button_five.png)\
     5.2. In pop-up window choose approach from drop-down menu and confirm with 'OK'\
     \
     Change the valve modeling approach.
 ## Run pipeline
-Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline' or do the following steps for a more comprehensive execution of the pipeline:
+Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline' or do the following steps for a more comprehensive execution of the pipeline:\
 ![Image of the setup pipeline](/readme_images/Pipeline_optional.png)
 1. Remove basal region\
     1.1. Press button 'Remove basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
@@ -134,11 +138,11 @@ Select all ventricle objects and either run all steps with the button 'Quick rec
     This copies objects for aorta, atrium, mitral and aortic valve found in the Blender-project and scales, rotates and positions them at their respective places.
 
 ## Quick reset
-![Image of the dev tools panel](/readme_images/File_management_quick_reset.png)
-By selecting all objects to delete and pressing quick reset, it will import all the files saved from the last 'Translate and Rotate' process. 
+![Image of the dev tools panel](/readme_images/File_management_quick_reset.png)\
+By selecting all objects to delete and pressing quick reset, it will import all the files saved from the last 'Translate and Rotate' process. However, it will still use the directory specified in the "Import folder" as a reference point to find the temporary export to quick import.
 
 ## Export files
-![Image of the dev tools panel](/readme_images/File_management_export_directory.png)
+![Image of the dev tools panel](/readme_images/File_management_export_directory.png)\
 Select all files to export in Blender.
 File→Export→.STL→
 - tick ASCII checkbox
@@ -163,6 +167,20 @@ Check the node-connectivity of all selected objects. This includes:
 - a check if the edges and faces of all objects are created with the same vertices
 ### Color minimal distance to raw object
 During the usage of the pipeline the longitudinal shift is saved as a variable bound to the respective object (ventricle 0 ... X). The user has to re-import the raw data and rename it to 'ref_obj'. While the reconstructed object is selected pressing the button 'Color minimal distance to raw object' will compute the minimal distance from each face-center of the reconstructed ventricle to any face-center of the reference object resulting in a 3d-representation of the Hausdorff distance (https://cgm.cs.mcgill.ca/~godfried/teaching/cg-projects/98/normand/main.html). The faces of the object are then colored with the distances which are normalized with the maximum value resulting in a scale from 0 to 1 (blue→white→red). To view the colors select 'Material Preview' in Blender (top right in 3D Viewport). This process give a qualitative visual representation of the quality of the reconstruction pipeline.
+
+# Plot STL values
+![Image of the plotting functionality](/readme_images/Plot_function.png)\
+After exporting the pipeline, the values of the exported STL and it's interpolation can be plotted to visualize the data.
+Both top paths are used to specify where to draw the input directory to be used for plotting.
+Click on "Display STL plot" to just display the plot or on "Save STL plot" to save the STL plot as the **specificied file name** (in bottom right) alongside other relevant files into the **specified path** (in bottom left).
+
+The selected input directory should contain all the .stl files to be plotted ordered numerically with a sub-directory named "Connectivity". "Connectiviy" contains all the vertices and faces.
+As example:\
+This is how the selected input plot directory would look like:
+![Image of the plot input directory](/readme_images/input_plot_dir.png)\
+And this is how the connectivity sub-directory would look like:
+![Image of the plot input directory](/readme_images/Connectivity_sub_dir_example.png)
+
 # Authors and acknowledgment
 - Author: Daniel Verhülsdonk
 - Supervision by: Jan-Niklas Thiel (thiel@ame.rwth-aachen.de) and Michael Neidlin
