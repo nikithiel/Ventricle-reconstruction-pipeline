@@ -19,7 +19,6 @@ import mathutils
 import open3d as o3d
 import os
 import re
-import atexit
 
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -2091,7 +2090,8 @@ class MESH_OT_import_ventricle(bpy.types.Operator):
         if not import_dir_raw:
             import_dir_raw = "//"
         for name in os.listdir(import_dir_raw):
-            if not name=="rotated": bpy.ops.import_mesh.stl(filepath=os.path.join(import_dir_raw,name))
+            sub = re.compile(r'_\d*')
+            if sub.search(name): bpy.ops.import_mesh.stl(filepath=os.path.join(import_dir_raw,name))
         return {'FINISHED'}
     
 class MESH_OT_quick_reset(bpy.types.Operator):
