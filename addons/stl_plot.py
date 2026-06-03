@@ -638,7 +638,7 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
     if plot_input_dirbase != "":
         vol_frames_plotbase = np.concatenate([vol_ml_base, [vol_ml_base[0]]])
     plt.plot(t_frames_plot, vol_frames_plot, marker="o", linewidth=1.0, label="Original STL frames")
-    plt.plot(t_frames_plot, vol_frames_plotbase, marker="o", linewidth=1.0, label="Raw Frames")
+    plt.plot(t_frames_plot, vol_frames_plotbase, marker="o", linewidth=1.0, label="Raw frames")
 
     plt.xlabel("Time in ms")
     plt.ylabel("LV volume in mL")
@@ -669,8 +669,8 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
         "es_ms_used": es_ms,
         "ed_source": ed_source,
         "es_source": es_source,
-        "frames_csv_path": str(csv_path),
-        "interp_csv_path": str(csv_interp_path),
+        #"frames_csv_path": str(csv_path),
+        #"interp_csv_path": str(csv_interp_path),
         "fig_path": str(fig_path),
     }
 

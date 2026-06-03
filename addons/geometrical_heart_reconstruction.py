@@ -102,6 +102,11 @@ def transfer_data_to_mesh(obj):
     bm.faces.ensure_lookup_table()
     return bm
 
+def get_value(self):
+    return "//"
+
+def set_value(self,value):
+    self["ventricle_import_dir"] = value
 # UI-interface functions.
 class MESH_OT_get_node(bpy.types.Operator):
     """Get node position coordinates and save coordinates in UI"""
@@ -2376,7 +2381,7 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
 
         _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_base_dir, interpolMethod, "volume", True)
 
-        plot_path = os.path.join(plot_input_dir,"comparison_plot.png")
+        plot_path = os.path.join(plot_input_dir,"volume_curve_comparison.png")
         fig.savefig(plot_path)
         
         return{'FINISHED'}
@@ -2507,7 +2512,6 @@ def register():
         description="Folder to import the ventricle STL dataset",
         subtype='DIR_PATH',
         default="//",
-        options={'SKIP_SAVE'}
     )
 
     # Export / CFD pipeline variables.
@@ -2516,7 +2520,6 @@ def register():
         description="Folder to export for ventricle connectivity/coordinates and STL export",
         subtype='DIR_PATH',
         default="//",
-        options={'SKIP_SAVE'}
     )
     
     bpy.types.Scene.plot_input_path = bpy.props.StringProperty(
@@ -2524,7 +2527,6 @@ def register():
         description="Directory for plotting input",
         subtype="DIR_PATH",
         default="//",
-        options={'SKIP_SAVE'}
     )
     
     # Register UI-classes for Panels and functions.
@@ -2539,10 +2541,6 @@ def unregister(): # Unregister classes.
     if dev_env_tools:
         for c in dev_classes: bpy.utils.unregister_class(c)
 
-    # Remove custom Scene properties
-    del bpy.types.Scene.ventricle_import_dir
-    del bpy.types.Scene.ventricle_export_dir
-    del bpy.types.Scene.plot_input_path
-    
-    
-if __name__ == '__main__': register() 
+        
+if __name__ == '__main__': 
+    register() 

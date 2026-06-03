@@ -179,7 +179,7 @@ As example:\
 This is how the selected input plot directory would look like:
 ![Image of the plot input directory](/readme_images/input_plot_dir.png)\
 And this is how the connectivity sub-directory would look like:
-![Image of the plot input directory](/readme_images/Connectivity_sub_dir_example.png)\
+![Image of the plot input directory](/readme_images/Connectivity_sub_dir_example.png)
 
 # Authors and acknowledgment
 - Author: Daniel Verhülsdonk
