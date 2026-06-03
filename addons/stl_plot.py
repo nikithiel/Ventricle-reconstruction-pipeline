@@ -428,7 +428,7 @@ def _mesh_volume_mm3(verts, faces):
     vol = np.sum(np.einsum("ij,ij->i", v0, np.cross(v1, v2))) / 6.0
     return float(abs(vol))
 
-def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_dir2="", plot_output_dir="", inter_method=None, out_prefix="volume"):
+def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_dirbase="", inter_method=None, out_prefix="volume", save_csv="False"):
     """
     Derive ED/ES timings from the ventricle volume curve (from Connectivity mesh).
     - Computes volumes for the N input frames (startFrameID..endFrameID)
@@ -469,7 +469,6 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
         )
 
     facespath = os.path.join(plot_input_dir,"Connectivity","ventricle_faces.txt")
-    print(facespath)
     faces = _load_faces_connectivity(facespath)
 
     vertspath = os.path.join(plot_input_dir,"Connectivity")
@@ -489,36 +488,37 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
     dt_frame = rr_ms / float(N)
     t_frames = np.arange(N, dtype=float) * dt_frame  # [0, RR) in N bins
     
-    if plot_input_dir2 != "":
-        facespath2 = os.path.join(plot_input_dir2, "Connectivity", "ventricle_faces.txt")
-        faces = _load_faces_connectivity(facespath2)
+    if plot_input_dirbase != "":
+        facespathbase = os.path.join(plot_input_dirbase, "Connectivity", "ventricle_faces.txt")
+        facesbase = _load_faces_connectivity(facespathbase)
         
-        vertspath2 = os.path.join(plot_input_dir2, "Connectivity")
+        vertspathbase = os.path.join(plot_input_dirbase, "Connectivity")
         
         # Volumes for original frames
-        frame_ids = list(range(start_id, end_id + 1))
-        vol_mm3 = []
-        verts_frames = []
-        for fid in frame_ids:
-            verts = _load_verts_connectivity(vertspath,fid)
-            verts_frames.append(verts)
-            vol_mm3.append(_mesh_volume_mm3(verts, faces))
-        vol_mm3 = np.asarray(vol_mm3, dtype=float)
-        vol_ml_2 = vol_mm3 / 1000.0  # mm^3 -> mL
+        frame_ids_base = list(range(start_id, end_id + 1))
+        vol_mm3_base = []
+        verts_frames_base = []
+        for fid in frame_ids_base:
+            vertsbase = _load_verts_connectivity(vertspathbase,fid)
+            verts_frames_base.append(verts)
+            vol_mm3_base.append(_mesh_volume_mm3(vertsbase, facesbase))
+        vol_mm3_base = np.asarray(vol_mm3_base, dtype=float)
+        vol_ml_base = vol_mm3_base / 1000.0  # mm^3 -> mL
 
-    # Export per-frame volumes
-    # Persistent postprocessing output folder in project root (CWD)
-    post_dir = plot_output_dir
+    
+    post_dir = plot_input_dir
+    if save_csv: 
+        # Export per-frame volumes
+        # Persistent postprocessing output folder in the same input folder
+        csv_path = os.path.join(post_dir,f"_{out_prefix}_frames_volumes.csv")
 
-    csv_path = os.path.join(post_dir,f"_{out_prefix}_frames_volumes.csv")
+        remove_if_exists(csv_path) # Remove existing file if any
 
-    remove_if_exists(csv_path) # Remove existing file if any
-
-    with open(csv_path, "w+", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["frame_i", "frameID", "time_ms", "volume_mL"])
-        for i, fid in enumerate(frame_ids):
-            w.writerow([i, fid, f"{t_frames[i]:.6f}", f"{vol_ml[i]:.6f}"])
+        with open(csv_path, "w+", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["frame_i", "frameID", "time_ms", "volume_mL"])
+            for i, fid in enumerate(frame_ids):
+                w.writerow([i, fid, f"{t_frames[i]:.6f}", f"{vol_ml[i]:.6f}"])
 
     # Interpolate FULL MESH to match UDFPTS temporal resolution (compute volume at every interpolated time step)
     # UDFPTS has (numInterm * numberFrames + 1) frames over one cycle, including a periodic duplicate of the start state.
@@ -606,15 +606,16 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
         ed_source = "from input"
         es_source = "from input"
 
-    # Export interpolated-step volume curve
-    csv_interp_path = os.path.join(post_dir,f"_{out_prefix}_interp_volumes.csv")
-    remove_if_exists(csv_interp_path) # Remove existing file if any
+    if save_csv:
+        # Export interpolated-step volume curve
+        csv_interp_path = os.path.join(post_dir,f"_{out_prefix}_interp_volumes.csv")
+        remove_if_exists(csv_interp_path) # Remove existing file if any
 
-    with open(csv_interp_path, "w+", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["step_i", "time_ms", "volume_mL"])
-        for i in range(M + 1):
-            w.writerow([i, f"{t_interp[i]:.6f}", f"{vol_interp_ml[i]:.6f}"])
+        with open(csv_interp_path, "w+", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["step_i", "time_ms", "volume_mL"])
+            for i in range(M + 1):
+                w.writerow([i, f"{t_interp[i]:.6f}", f"{vol_interp_ml[i]:.6f}"])
 
     # Plot interpolated curve with ED/ES (only the ED/ES that are actually used)
     fig_path = os.path.join(post_dir,f"_{out_prefix}_curve.png")
@@ -634,24 +635,21 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
     # For visualization, add a wrap-around point at t=RR to show periodic closure.
     t_frames_plot = np.concatenate([t_frames, [rr_ms]])
     vol_frames_plot = np.concatenate([vol_ml, [vol_ml[0]]])
-    if plot_input_dir2 != "":
-        vol_frames_plot2 = np.concatenate([vol_ml_2, [vol_ml_2[0]]])
-        # Quick difference check
-        vol_frames_plot2 = vol_frames_plot2 + np.ones_like(vol_frames_plot2)
+    if plot_input_dirbase != "":
+        vol_frames_plotbase = np.concatenate([vol_ml_base, [vol_ml_base[0]]])
     plt.plot(t_frames_plot, vol_frames_plot, marker="o", linewidth=1.0, label="Original STL frames")
-    plt.plot(t_frames_plot, vol_frames_plot2, marker="o", linewidth=1.0, label="2nd Original STL frames")
+    plt.plot(t_frames_plot, vol_frames_plotbase, marker="o", linewidth=1.0, label="Raw Frames")
 
     plt.xlabel("Time in ms")
     plt.ylabel("LV volume in mL")
 
-    ed_color = "C0"
-    es_color = "C1"
-    plt.axvline(ed_ms, color=ed_color, linestyle="-", label=f"ED at {ed_ms:.3f} ms")
-    plt.axvline(es_ms, color=es_color, linestyle="-", label=f"ES at {es_ms:.3f} ms")
+    ed_color = "red"
+    es_color = "purple"
+    plt.axvline(ed_ms, color=ed_color, linestyle="dashed", label=f"ED at {ed_ms:.3f} ms")
+    plt.axvline(es_ms, color=es_color, linestyle="dashed", label=f"ES at {es_ms:.3f} ms")
 
     plt.legend()
     plt.tight_layout()
-    #fig.show() if usecase == "show" else plt.savefig(fig_path, dpi=200)
 
     diag = {
         "auto_flag": auto_flag,

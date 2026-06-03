@@ -171,7 +171,15 @@ During the usage of the pipeline the longitudinal shift is saved as a variable b
 # Plot STL values
 ![Image of the plotting functionality](/readme_images/Plot_function.png)
 After exporting the pipeline, the values of the exported STL and it's interpolation can be plotted to visualize the data.
-Click on "Display STL plot" to just display the plot or on "Save STL plot" to save the STL plot as the **specified name** alongside other relevant files into the **specified path**.
+Both top paths are used to specify where to draw the input directory to be used for plotting.
+Click on "Display STL plot" to just display the plot or on "Save STL plot" to save the STL plot as the **specificied file name** (in bottom right) alongside other relevant files into the **specified path** (in bottom left).
+
+The selected input directory should contain all the .stl files to be plotted ordered numerically with a sub-directory named "Connectivity". "Connectiviy" contains all the vertices and faces.
+As example:\
+This is how the selected input plot directory would look like:
+![Image of the plot input directory](/readme_images/input_plot_dir.png)\
+And this is how the connectivity sub-directory would look like:
+![Image of the plot input directory](/readme_images/Connectivity_sub_dir_example.png)\
 
 # Authors and acknowledgment
 - Author: Daniel Verhülsdonk

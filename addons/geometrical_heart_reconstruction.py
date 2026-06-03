@@ -19,6 +19,7 @@ import mathutils
 import open3d as o3d
 import os
 import re
+import atexit
 
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -2057,21 +2058,15 @@ class PANEL_Dev_tools(bpy.types.Panel):
         row = layout.row()
         layout.operator('heart.color_min_dist', text= "Color minimal distance to raw object", icon = 'COLORSET_04_VEC') 
         
+        row = layout.row()
+        layout.label(text='Comparison of volume curves')
         # Plot STL setting file
         row = layout.row()
         row.prop(context.scene, "plot_input_path", text = "Plot inputs")
-        row.prop(context.scene, "plot_input_path2", text = "2nd plot inputs")
         # Plot STL and display
         row = layout.row(align=True)
-        row.operator('heart.plot_stl', text = "Display STL plot(s)", icon = 'AXIS_FRONT')
-        row.operator('heart.save_plot_stl', text = 'Save STL plot(s)', icon = 'AXIS_FRONT')
-        
-        # Plot STL path for saving
-        row = layout.row(align=True)
-        row.prop(context.scene, "plot_savepath", text = "Plot folder")
-        row.prop(context.scene, "plot_filename", text = "Plot filename")
-        #row = layout.row() # New button with test function
-        #layout.operator('heart.test', text= "Test function", icon = 'CHECKMARK')
+        row.operator('heart.plot_stl', text = "Show", icon = 'AXIS_FRONT')
+        row.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
 
 #------
 
@@ -2314,6 +2309,7 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
         return {'FINISHED'}
 
 class MESH_OT_plot_STL(bpy.types.Operator):
+    """Display the plot"""
     bl_idname = 'heart.plot_stl'
     bl_label = 'plot STL files'
     
@@ -2321,8 +2317,7 @@ class MESH_OT_plot_STL(bpy.types.Operator):
         scene = context.scene
         
         plot_input_dir = bpy.path.abspath((scene.plot_input_path or "").strip())
-        plot_input_dir2 = bpy.path.abspath((scene.plot_input_path2 or "").strip())
-        plot_output_dir = bpy.path.abspath((scene.plot_savepath or "").strip())
+        plot_base_dir = os.path.join(bpy.path.abspath((scene.ventricle_import_dir or "").strip()), "rotated")
         
         for filename in os.listdir(plot_input_dir):
             print(filename)
@@ -2343,13 +2338,14 @@ class MESH_OT_plot_STL(bpy.types.Operator):
         # Pre-check STL and connectivity inputs
         check_stl_and_connectivity(plot_input_dir, numFrame, sFrameID, eFrameID)
 
-        _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_input_dir2, plot_output_dir, interpolMethod, "volume")
+        _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_base_dir, interpolMethod, "volume", False)
 
         plt.show(block=True)
         
         return{'FINISHED'}
     
 class MESH_OT_save_plot_STL(bpy.types.Operator):
+    """Save the plot without displaying and also any additional files within the input folder"""
     bl_idname = 'heart.save_plot_stl'
     bl_label = 'plot STL files'
     
@@ -2357,7 +2353,7 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
         scene = context.scene
         
         plot_input_dir = bpy.path.abspath((scene.plot_input_path or "").strip())
-        plot_output_dir = bpy.path.abspath((scene.plot_savepath or "").strip())
+        plot_base_dir = os.path.join(bpy.path.abspath((scene.ventricle_import_dir or "").strip()), "rotated")
         
         for filename in os.listdir(plot_input_dir):
             print(filename)
@@ -2378,14 +2374,9 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
         # Pre-check STL and connectivity inputs
         check_stl_and_connectivity(plot_input_dir, numFrame, sFrameID, eFrameID)
 
-        _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_output_dir, interpolMethod, "volume")
-        
-        plot_dir_raw = bpy.path.abspath((scene.plot_savepath or "").strip())
-        plot_filename_raw = (scene.plot_filename or "").strip()
-        if not plot_filename_raw:
-            plot_filename_raw = "plot.png"
-        plot_path = os.path.join(plot_dir_raw,plot_filename_raw)
+        _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_base_dir, interpolMethod, "volume", True)
 
+        plot_path = os.path.join(plot_input_dir,"comparison_plot.png")
         fig.savefig(plot_path)
         
         return{'FINISHED'}
@@ -2515,7 +2506,8 @@ def register():
         name="Import folder",
         description="Folder to import the ventricle STL dataset",
         subtype='DIR_PATH',
-        default="//"
+        default="//",
+        options={'SKIP_SAVE'}
     )
 
     # Export / CFD pipeline variables.
@@ -2523,38 +2515,18 @@ def register():
         name="Export folder",
         description="Folder to export for ventricle connectivity/coordinates and STL export",
         subtype='DIR_PATH',
-        default="//"
-    )
-    
-    # Plot variables
-    bpy.types.Scene.plot_savepath = bpy.props.StringProperty(
-        name="Plot folder",
-        description="Folder to export the plotted file",
-        subtype='DIR_PATH',
-        default="//"
-    )
-    
-    # Plot variables
-    bpy.types.Scene.plot_filename = bpy.props.StringProperty(
-        name="Plot file name",
-        description="Name of the plot file",
-        subtype='DIR_PATH',
-        default="//"
+        default="//",
+        options={'SKIP_SAVE'}
     )
     
     bpy.types.Scene.plot_input_path = bpy.props.StringProperty(
         name = "Input directory for plotting",
         description="Directory for plotting input",
         subtype="DIR_PATH",
-        default="//"
+        default="//",
+        options={'SKIP_SAVE'}
     )
     
-    bpy.types.Scene.plot_input_path2 = bpy.props.StringProperty(
-        name = "Second input directory for plotting comparison",
-        description="2nd directory for plotting input",
-        subtype="DIR_PATH",
-        default="//"
-    )
     # Register UI-classes for Panels and functions.
     for c in classes: bpy.utils.register_class(c)
     # Register Development UI-classes.
@@ -2568,6 +2540,9 @@ def unregister(): # Unregister classes.
         for c in dev_classes: bpy.utils.unregister_class(c)
 
     # Remove custom Scene properties
+    del bpy.types.Scene.ventricle_import_dir
     del bpy.types.Scene.ventricle_export_dir
+    del bpy.types.Scene.plot_input_path
     
-if __name__ == '__main__': register()  
+    
+if __name__ == '__main__': register() 
