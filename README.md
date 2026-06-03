@@ -118,7 +118,7 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     \
     Change the valve modeling approach.
 ## Run pipeline
-Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline' or do the following steps for a more comprehensive execution of the pipeline:
+Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline' or do the following steps for a more comprehensive execution of the pipeline:\
 ![Image of the setup pipeline](/readme_images/Pipeline_optional.png)\
 1. Remove basal region\
     1.1. Press button 'Remove basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
