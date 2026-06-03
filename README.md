@@ -119,7 +119,7 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     Change the valve modeling approach.
 ## Run pipeline
 Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline' or do the following steps for a more comprehensive execution of the pipeline:\
-![Image of the setup pipeline](/readme_images/Pipeline_optional.png)\
+![Image of the setup pipeline](/readme_images/Pipeline_optional.png)
 1. Remove basal region\
     1.1. Press button 'Remove basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
@@ -153,7 +153,7 @@ File→Export→.STL→
 →export STL
 - Video on how to use the pipeline in further CFD simulations at https://www.youtube.com/watch?v=C1O20YvkCJs
 ## Optional usage: Development tools panel
-![Image of the dev tools panel](/readme_images/Dev_tools.png)\
+![Image of the dev tools panel](/readme_images/Dev_tools.png)
 ### Compute volumes
 Compute volumes of all selected objects and prints them to the Blender Python console.
 ### Get vertex indices
