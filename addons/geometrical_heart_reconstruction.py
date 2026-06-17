@@ -652,7 +652,7 @@ class MESH_OT_poisson(bpy.types.Operator):
         for object in bpy.context.selected_objects: create_poisson_from_object_pointcloud(context, object) # Repeat Poisson-surface-reconstruction algorithm for all selected objects.
         return{'FINISHED'}
 
-def create_poisson_from_object_pointcloud(context, obj):
+def create_poisson_from_object_pointcloud(context, obj): #TODO IMPLEMENTATION DURCHLESEN
     """Create poisson surface reconstruction for a single point cloud"""
     point_data = np.asarray(obj.data.vertices) # Get point data of current object.
     # Initialize and fill entries of object vertices.
@@ -913,8 +913,15 @@ def mesh_create_basal(context):
         cons_print("No elements selected.")
         return False
     selected_objects = context.selected_objects
+    if len(selected_objects) == 1:
+        bpy.types.Scene.reference_object_name = selected_objects[0].name
+    else:
+        cons_print(f"Currently does not work :(")
+        return False
     # Find object with mean volume and create a copy of it as a reference object to create the reference basal region from.
-    reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
+    cons_print(f"Debug check: {bpy.types.Scene.reference_object_name}")
+    #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
+    reference_copy = copy_object(selected_objects[0].name, 'basal_region')
     # Deselect objects.
     for obj in selected_objects: obj.select_set(False)
     # Operations to create basal region of the ventricle.
