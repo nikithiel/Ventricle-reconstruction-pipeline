@@ -902,24 +902,21 @@ class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal region of ventricle using the position and angles of the heart valves.'
     def execute(self, context):
-        if not mesh_create_basal(context): return{'CANCELLED'}
+        if not context.selected_objects:
+            cons_print("No elements selected.")
+            return False
+        selected_objects = context.selected_objects
+        for obj in selected_objects:
+            if not mesh_create_basal(context, [obj]): return{'CANCELLED'}
         return{'FINISHED'} 
 
-def mesh_create_basal(context):
+def mesh_create_basal(context, selected_objects):
     """Create basal region"""
-    cons_print("Create basal regions for selected ventricles...")
-    # Read selected objects.
-    if not context.selected_objects:
-        cons_print("No elements selected.")
-        return False
-    selected_objects = context.selected_objects
     if len(selected_objects) == 1:
         bpy.types.Scene.reference_object_name = selected_objects[0].name
     else:
         cons_print(f"Currently does not work :(")
         return False
-    # Find object with mean volume and create a copy of it as a reference object to create the reference basal region from.
-    cons_print(f"Debug check: {bpy.types.Scene.reference_object_name}")
     #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
     reference_copy = copy_object(selected_objects[0].name, 'basal_region')
     # Deselect objects.
@@ -2080,7 +2077,7 @@ class PANEL_Dev_tools(bpy.types.Panel):
         row.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
         # Test function to do a topologically preserving transformation trick
         row = layout.row(align=True)
-        row.operator('heart.test_transform', text = "TEST", icon = "AXIS_FRONT")
+        row.operator('heart.object_transform', text = "Transform Objects", icon = "SHAPEKEY_DATA")
 
 #------
 
@@ -2469,10 +2466,10 @@ def export_object_to_stl(obj, filepath, depsgraph=None):
 
     eval_obj.to_mesh_clear()
 
-class MESH_OT_test_transform(bpy.types.Operator):
-    """Reshape basal region for connetivity. Currently uses the object with max mesh count as reference (WIP)"""
-    bl_idname = 'heart.test_transform'
-    bl_label = 'Test Transformation'
+class MESH_OT_object_transform(bpy.types.Operator):
+    """Reshape mesh object to preserve mesh connetivity and topology between objects. Currently uses the object with max mesh count as reference (WIP)"""
+    bl_idname = 'heart.object_transform'
+    bl_label = 'Object Transformation'
     def execute(self,context):
         scene = context.scene
         view_layer = context.view_layer
@@ -2523,7 +2520,7 @@ classes = [
     MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,
 ]
 
-dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_test_transform]
+dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_object_transform]
   
 def register():
     # Position variables.
