@@ -30,6 +30,7 @@ from pathlib import Path
 
 
 from stl_plot import check_stl_and_connectivity, derive_ed_es_from_volume_curve, parseRunTimeVariables_unique
+from calculate_valve_diameters import main_calc_diameter
 scene = bpy.types.Scene
 
 dev_env_tools = True
@@ -652,7 +653,7 @@ class MESH_OT_poisson(bpy.types.Operator):
         for object in bpy.context.selected_objects: create_poisson_from_object_pointcloud(context, object) # Repeat Poisson-surface-reconstruction algorithm for all selected objects.
         return{'FINISHED'}
 
-def create_poisson_from_object_pointcloud(context, obj):
+def create_poisson_from_object_pointcloud(context, obj): 
     """Create poisson surface reconstruction for a single point cloud"""
     point_data = np.asarray(obj.data.vertices) # Get point data of current object.
     # Initialize and fill entries of object vertices.
@@ -902,19 +903,23 @@ class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal region of ventricle using the position and angles of the heart valves.'
     def execute(self, context):
-        if not mesh_create_basal(context): return{'CANCELLED'}
+        if not context.selected_objects:
+            cons_print("No elements selected.")
+            return False
+        selected_objects = context.selected_objects
+        for obj in selected_objects:
+            if not mesh_create_basal(context, [obj]): return{'CANCELLED'}
         return{'FINISHED'} 
 
-def mesh_create_basal(context):
+def mesh_create_basal(context, selected_objects):
     """Create basal region"""
-    cons_print("Create basal regions for selected ventricles...")
-    # Read selected objects.
-    if not context.selected_objects:
-        cons_print("No elements selected.")
+    if len(selected_objects) == 1:
+        bpy.types.Scene.reference_object_name = selected_objects[0].name
+    else:
+        cons_print(f"Currently does not work :(")
         return False
-    selected_objects = context.selected_objects
-    # Find object with mean volume and create a copy of it as a reference object to create the reference basal region from.
-    reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
+    #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
+    reference_copy = copy_object(selected_objects[0].name, 'basal_region')
     # Deselect objects.
     for obj in selected_objects: obj.select_set(False)
     # Operations to create basal region of the ventricle.
@@ -1941,6 +1946,9 @@ class PANEL_Valves(bpy.types.Panel):
         row = layout.row()
         row.prop(context.scene, 'aortic_radius', text="Aortic radius", icon='META_BALL')
         if dev_env_tools:
+            # Calculate Valve Diameter
+            row = layout.row()
+            row.operator('heart.calculate_valve_diameter', text = "Calculate Diameter", icon = "MESH_CIRCLE")
             row = layout.row()
             layout.operator('heart.build_valve',  text= "Add valve interface nodes", icon = 'PROP_OFF')
             row = layout.row()
@@ -2071,6 +2079,9 @@ class PANEL_Dev_tools(bpy.types.Panel):
         row = layout.row(align=True)
         row.operator('heart.plot_stl', text = "Show", icon = 'AXIS_FRONT')
         row.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
+        # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
+        row = layout.row(align=True)
+        row.operator('heart.object_transform', text = "Transform Objects", icon = "SHAPEKEY_DATA")
 
 #------
 
@@ -2347,8 +2358,8 @@ class MESH_OT_plot_STL(bpy.types.Operator):
 
         plt.show(block=True)
         
-        return{'FINISHED'}
-    
+        return{'FINISHED'}   
+     
 class MESH_OT_save_plot_STL(bpy.types.Operator):
     """Save the plot without displaying and also any additional files within the input folder"""
     bl_idname = 'heart.save_plot_stl'
@@ -2378,13 +2389,38 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
 
         # Pre-check STL and connectivity inputs
         check_stl_and_connectivity(plot_input_dir, numFrame, sFrameID, eFrameID)
+        
+        os.makedirs(os.path.join(plot_input_dir,"volume_comparison"), exist_ok=True)
 
         _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_base_dir, interpolMethod, "volume", True)
 
-        plot_path = os.path.join(plot_input_dir,"volume_curve_comparison.png")
+        plot_path = os.path.join(plot_input_dir,"volume_comparison","volume_curve_comparison.png")
+        cons_print(plot_path)
         fig.savefig(plot_path)
         
         return{'FINISHED'}
+
+class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
+    """Calculates Valve Diameter"""
+    bl_idname = 'heart.calculate_valve_diameter'
+    bl_label = 'Calculate Valve Diameter'
+    
+    def execute(self,context):
+        scene = context.scene
+        diam_dir_raw = bpy.path.abspath((scene.ventricle_import_dir or "").strip())
+        if not diam_dir_raw:
+            diam_dir_raw = "//"
+        cons_print(f"Currently calculating valve diameter")
+        
+        figs, res = main_calc_diameter(diam_dir_raw, 400)
+        
+        context.scene.mitral_radius_long = res[0] * 1000
+        context.scene.mitral_radius_small = res[1] * 1000
+        context.scene.aortic_radius = res[2] * 1000
+        
+        
+        return{"FINISHED"}
+            
 # -------------------------------------------------------------------
 # Helpers for ventricle detection and STL export
 # -------------------------------------------------------------------
@@ -2424,6 +2460,7 @@ def find_ventricle_objects(objs):
     items.sort(key=lambda x: x[0])
     return [o for (_, o) in items]
 
+from mathutils.bvhtree import BVHTree
 def export_object_to_stl(obj, filepath, depsgraph=None):
     """Custom ASCII STL export for a single object."""
     if depsgraph is None:
@@ -2458,6 +2495,52 @@ def export_object_to_stl(obj, filepath, depsgraph=None):
 
     eval_obj.to_mesh_clear()
 
+class MESH_OT_object_transform(bpy.types.Operator):
+    """Reshape mesh object to preserve mesh connetivity and topology between objects. Currently uses the object with max mesh count as reference (WIP)"""
+    bl_idname = 'heart.object_transform'
+    bl_label = 'Object Transformation'
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+
+        # --- Remember original selection & active object, also which meshes were selected ---
+        selected_objects = context.selected_objects
+        
+        if len(selected_objects) == 0 or not selected_objects:
+            cons_print(f"No objects selected")
+            return False
+
+        max = 0
+        for a in selected_objects:
+            if len(bmesh.from_edit_mesh(a.data).verts) > max:
+                source = a
+                max = len(bmesh.from_edit_mesh(a.data).verts)
+        
+        cons_print(f"Object used as reference {source.name}")
+        
+        bpy.ops.object.mode_set(mode='OBJECT') 
+        
+        for obj in selected_objects:
+            if obj != source:
+                cons_print(f"current object target {obj.name}")
+                copied_source = copy_object(source.name, obj.name + "_transformed")
+                BvH_transform(copied_source,obj)
+                copied_source.data.update()
+        cons_print(f"Operation completed")    
+        return{"FINISHED"}
+
+def BvH_transform(source,target):
+    cons_print(f"source {source}")
+    cons_print(f"target {target}")
+    bvh = BVHTree.FromObject(target, bpy.context.evaluated_depsgraph_get())
+    
+    for v in source.data.vertices:
+        world_co = source.matrix_world @ v.co
+
+        loc, normal, index, dist = bvh.find_nearest(world_co)
+
+        if loc:
+            v.co = source.matrix_world.inverted() @ loc
     
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
@@ -2466,7 +2549,7 @@ classes = [
     MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,
 ]
 
-dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL]
+dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_object_transform, MESH_OT_calculate_valve_diameter]
   
 def register():
     # Position variables.
