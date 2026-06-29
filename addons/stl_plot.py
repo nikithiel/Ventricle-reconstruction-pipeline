@@ -510,7 +510,7 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
     if save_csv: 
         # Export per-frame volumes
         # Persistent postprocessing output folder in the same input folder
-        csv_path = os.path.join(post_dir,f"_{out_prefix}_frames_volumes.csv")
+        csv_path = os.path.join(post_dir,"volume_comparison",f"_{out_prefix}_frames_volumes.csv")
 
         remove_if_exists(csv_path) # Remove existing file if any
 
@@ -608,7 +608,7 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
 
     if save_csv:
         # Export interpolated-step volume curve
-        csv_interp_path = os.path.join(post_dir,f"_{out_prefix}_interp_volumes.csv")
+        csv_interp_path = os.path.join(post_dir,"volume_comparison",f"_{out_prefix}_interp_volumes.csv")
         remove_if_exists(csv_interp_path) # Remove existing file if any
 
         with open(csv_interp_path, "w+", newline="") as f:

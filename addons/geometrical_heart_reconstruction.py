@@ -30,6 +30,7 @@ from pathlib import Path
 
 
 from stl_plot import check_stl_and_connectivity, derive_ed_es_from_volume_curve, parseRunTimeVariables_unique
+from calculate_valve_diameters import main_calc_diameter
 scene = bpy.types.Scene
 
 dev_env_tools = True
@@ -1945,6 +1946,9 @@ class PANEL_Valves(bpy.types.Panel):
         row = layout.row()
         row.prop(context.scene, 'aortic_radius', text="Aortic radius", icon='META_BALL')
         if dev_env_tools:
+            # Calculate Valve Diameter
+            row = layout.row()
+            row.operator('heart.calculate_valve_diameter', text = "Calculate Diameter", icon = "MESH_CIRCLE")
             row = layout.row()
             layout.operator('heart.build_valve',  text= "Add valve interface nodes", icon = 'PROP_OFF')
             row = layout.row()
@@ -2075,7 +2079,7 @@ class PANEL_Dev_tools(bpy.types.Panel):
         row = layout.row(align=True)
         row.operator('heart.plot_stl', text = "Show", icon = 'AXIS_FRONT')
         row.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
-        # Test function to do a topologically preserving transformation trick
+        # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
         row = layout.row(align=True)
         row.operator('heart.object_transform', text = "Transform Objects", icon = "SHAPEKEY_DATA")
 
@@ -2354,7 +2358,8 @@ class MESH_OT_plot_STL(bpy.types.Operator):
 
         plt.show(block=True)
         
-        return{'FINISHED'}    
+        return{'FINISHED'}   
+     
 class MESH_OT_save_plot_STL(bpy.types.Operator):
     """Save the plot without displaying and also any additional files within the input folder"""
     bl_idname = 'heart.save_plot_stl'
@@ -2384,14 +2389,38 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
 
         # Pre-check STL and connectivity inputs
         check_stl_and_connectivity(plot_input_dir, numFrame, sFrameID, eFrameID)
+        
+        os.makedirs(os.path.join(plot_input_dir,"volume_comparison"), exist_ok=True)
 
         _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_base_dir, interpolMethod, "volume", True)
 
-        plot_path = os.path.join(plot_input_dir,"volume_curve_comparison.png")
+        plot_path = os.path.join(plot_input_dir,"volume_comparison","volume_curve_comparison.png")
+        cons_print(plot_path)
         fig.savefig(plot_path)
         
         return{'FINISHED'}
+
+class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
+    """Calculates Valve Diameter"""
+    bl_idname = 'heart.calculate_valve_diameter'
+    bl_label = 'Calculate Valve Diameter'
     
+    def execute(self,context):
+        scene = context.scene
+        diam_dir_raw = bpy.path.abspath((scene.ventricle_import_dir or "").strip())
+        if not diam_dir_raw:
+            diam_dir_raw = "//"
+        cons_print(f"Currently calculating valve diameter")
+        
+        figs, res = main_calc_diameter(diam_dir_raw, 400)
+        
+        context.scene.mitral_radius_long = res[0] * 1000
+        context.scene.mitral_radius_small = res[1] * 1000
+        context.scene.aortic_radius = res[2] * 1000
+        
+        
+        return{"FINISHED"}
+            
 # -------------------------------------------------------------------
 # Helpers for ventricle detection and STL export
 # -------------------------------------------------------------------
@@ -2520,7 +2549,7 @@ classes = [
     MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,
 ]
 
-dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_object_transform]
+dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_object_transform, MESH_OT_calculate_valve_diameter]
   
 def register():
     # Position variables.
