@@ -2101,7 +2101,7 @@ class MESH_OT_import_ventricle(bpy.types.Operator):
         if not import_dir_raw:
             import_dir_raw = "//"
         for name in os.listdir(import_dir_raw):
-            sub = re.compile(r'_\d*')
+            sub = re.compile(r'_\d+')
             if sub.search(name): bpy.ops.import_mesh.stl(filepath=os.path.join(import_dir_raw,name))
         return {'FINISHED'}
     
