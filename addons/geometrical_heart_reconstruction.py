@@ -2526,7 +2526,7 @@ class MESH_OT_object_transform(bpy.types.Operator):
                 cons_print(f"current object target {obj.name}")
                 copied_source = copy_object(source.name, obj.name + "_transformed_CPD")
                 CPD_transform(copied_source,obj)
-
+                copied_source.data.update()
                 copied_source_bvh = copy_object(source.name, obj.name + "_transformed_BVH")
                 BvH_transform(copied_source_bvh,obj)
                 copied_source_bvh.data.update()
