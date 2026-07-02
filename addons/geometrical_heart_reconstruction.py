@@ -898,8 +898,7 @@ def build_valve_surface(context, obj, valve_mode, ratio, valve_index):
     bpy.ops.object.vertex_group_select()
     bpy.ops.object.mode_set(mode='OBJECT') 
 
-class MESH_OT_create_basal(bpy.types.Operator):
-    """Create basal region of ventricle using the position and angles of the heart valves"""
+"""class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal region of ventricle using the position and angles of the heart valves.'
     def execute(self, context):
@@ -909,10 +908,17 @@ class MESH_OT_create_basal(bpy.types.Operator):
         selected_objects = context.selected_objects
         for obj in selected_objects:
             if not mesh_create_basal(context, [obj]): return{'CANCELLED'}
+        return{'FINISHED'} """
+
+class MESH_OT_create_basal(bpy.types.Operator):
+    """Create basal region of ventricle using the position and angles of the heart valves"""
+    bl_idname = 'heart.create_basal'
+    bl_label = 'Create basal region of ventricle using the position and angles of the heart valves.'
+    def execute(self, context):
+        if not mesh_create_basal(context): return{'CANCELLED'}
         return{'FINISHED'} 
 
-def mesh_create_basal(context, selected_objects):
-    """Create basal region"""
+"""def mesh_create_basal(context, selected_objects):
     if len(selected_objects) == 1:
         bpy.types.Scene.reference_object_name = selected_objects[0].name
     else:
@@ -920,6 +926,35 @@ def mesh_create_basal(context, selected_objects):
         return False
     #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
     reference_copy = copy_object(selected_objects[0].name, 'basal_region')
+    # Deselect objects.
+    for obj in selected_objects: obj.select_set(False)
+    # Operations to create basal region of the ventricle.
+    basal_regions = create_basal_region_for_object(context, reference_copy)
+    if not basal_regions: 
+        cons_print(f"Error during the creation of the basal regions.")
+        return False # If an error ocurred during creation of basal region, dont continue.
+    # Cleanup.
+    # Reselect objects to state previous to this operation and deselect (and hide for performance) created objects.
+    for obj in selected_objects: obj.select_set(True)
+    for basal in basal_regions:  
+        basal.select_set(False)
+        basal.hide_set(True)
+    # Remove old basal region objects.
+    if context.scene.approach == 5: bpy.data.objects.remove(bpy.data.objects["basal_ref"], do_unlink=True)
+    bpy.data.objects.remove(bpy.data.objects["basal_region"], do_unlink=True)
+    bpy.data.objects.remove(bpy.data.objects["basal_region_poisson"], do_unlink=True)
+    return basal_regions"""
+
+def mesh_create_basal(context):
+    """Create basal region"""
+    cons_print("Create basal regions for selected ventricles...")
+    # Read selected objects.
+    if not context.selected_objects:
+        cons_print("No elements selected.")
+        return False
+    selected_objects = context.selected_objects
+    # Find object with mean volume and create a copy of it as a reference object to create the reference basal region from.
+    reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
     # Deselect objects.
     for obj in selected_objects: obj.select_set(False)
     # Operations to create basal region of the ventricle.
@@ -2101,7 +2136,7 @@ class MESH_OT_import_ventricle(bpy.types.Operator):
         if not import_dir_raw:
             import_dir_raw = "//"
         for name in os.listdir(import_dir_raw):
-            sub = re.compile(r'_\d*')
+            sub = re.compile(r'_\d+')
             if sub.search(name): bpy.ops.import_mesh.stl(filepath=os.path.join(import_dir_raw,name))
         return {'FINISHED'}
     

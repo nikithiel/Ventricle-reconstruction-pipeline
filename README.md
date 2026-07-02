@@ -40,6 +40,8 @@ subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'open3d'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'matplotlib'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'PyQt5'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'trimesh'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'pandas'])
 ```
 If pip is missing (Output 0 in Blender Python console):
 ```bash
@@ -51,11 +53,13 @@ main(args=['install','scipy'])
 main(args=['install','open3d'])
 main(args=['install','matplotlib'])
 main(args=['install','PyQt5'])
+main(args=['install','trimesh'])
+main(args=['install','pandas'])
 ```
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:
 - Search *LoopTools* → check *Mesh: LoopTools* → Save Preferences.
-- Install stl-plot.py and then ventricle-reconstruction-pipeline.py (**in this order**) from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
+- Install stl-plot.py, calculate_valve_diameters.py and then ventricle-reconstruction-pipeline.py (**in this order**) from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
 - Open the GVR-Pipeline.blend scene from the repository → after that a new category should appear on the right side of the 3D Viewport called 'GVR-Pipeline'. Clicking it will open panels containing buttons, etc. used for the pipeline.
 # Usage
 Video-tutorial: https://www.youtube.com/watch?v=0sduwcDeSm8 \
@@ -93,7 +97,7 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     ![Image of the Valve options panel](/readme_images/Valve_options.png)\
     3.2. Change positition (translation), rotation (angle) and size (radii) of the mitral and aortic valve using the respective textboxes\
     \
-    This sets up the arrangement of the mitral and aortic valve. (These inputs can be checked by pressing the buttons 'Add valve interface nodes' and 'Build support structure around valves'. Note that this will add nodes to an existing object. So consider creating a copy before pressing those buttons.)
+    This sets up the arrangement of the mitral and aortic valve. (These inputs can be checked by pressing the buttons 'Add valve interface nodes' and 'Build support structure around valves'. Note that this will add nodes to an existing object. So consider creating a copy before pressing those buttons.) An additional button "Calculate Diameter" also reads directly from the import folder and immediately sets the value of the Long mitral radius, Small mitral radius, and Aortic Radius. 
 4. Setup algorithm variables\
     4.1. Open panel 'Algorithm setup variables'\
     ![Image of the Algorithm setup variables panel](/readme_images/Algorithm_setup.png)\
@@ -127,7 +131,7 @@ Select all ventricle objects and either run all steps with the button 'Quick rec
 2. Create basal region\
     2.1. Press button 'Create basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
-    This creates a reference basal region used for all ventricle objects. For that first the valve indices and a support structure are added to a copy of the reference ventricle. Then the Poisson surface reconstruction is applied to the vertices to create a surface object from all vertices. After that the object is remeshed and the apical region is removed while smoothing the lower edge loop of the resulting basal region.
+    This creates a reference basal region used the selected object. For that first the valve indices and a support structure are added to a copy of the reference ventricle. Then the Poisson surface reconstruction is applied to the vertices to create a surface object from all vertices. After that the object is remeshed and the apical region is removed while smoothing the lower edge loop of the resulting basal region. If multiple objects are selected, then a basal region will be created for each of the selected object, however, these basal regions will most likely not share the same topology. The button "Mesh Transformation" is required to remesh the objects to share the same topology.
 3. Connect basal and apical parts\
     3.1. Press button 'Connect basal and apical regions' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
@@ -167,6 +171,9 @@ Check the node-connectivity of all selected objects. This includes:
 - a check if the edges and faces of all objects are created with the same vertices
 ### Color minimal distance to raw object
 During the usage of the pipeline the longitudinal shift is saved as a variable bound to the respective object (ventricle 0 ... X). The user has to re-import the raw data and rename it to 'ref_obj'. While the reconstructed object is selected pressing the button 'Color minimal distance to raw object' will compute the minimal distance from each face-center of the reconstructed ventricle to any face-center of the reference object resulting in a 3d-representation of the Hausdorff distance (https://cgm.cs.mcgill.ca/~godfried/teaching/cg-projects/98/normand/main.html). The faces of the object are then colored with the distances which are normalized with the maximum value resulting in a scale from 0 to 1 (blue→white→red). To view the colors select 'Material Preview' in Blender (top right in 3D Viewport). This process give a qualitative visual representation of the quality of the reconstruction pipeline.
+
+### Transform Objects
+By selecting multiple meshes with similar orientation, this button picks a mesh to use as reference, and then creates of copy and transform it into each of the other selected meshes. This aims to make sure that all the meshes share the same topology. It is transformed using a BvH Tree based transformation.
 
 # Plot STL values
 ![Image of the plotting functionality](/readme_images/Plot_function.png)\
