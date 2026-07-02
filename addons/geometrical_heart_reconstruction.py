@@ -20,6 +20,8 @@ import open3d as o3d
 import os
 import re
 
+from pycpd import RigidRegistration
+from mathutils.bvhtree import BVHTree
 import matplotlib
 matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
@@ -898,7 +900,7 @@ def build_valve_surface(context, obj, valve_mode, ratio, valve_index):
     bpy.ops.object.vertex_group_select()
     bpy.ops.object.mode_set(mode='OBJECT') 
 
-"""class MESH_OT_create_basal(bpy.types.Operator):
+class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal region of ventricle using the position and angles of the heart valves.'
     def execute(self, context):
@@ -908,17 +910,10 @@ def build_valve_surface(context, obj, valve_mode, ratio, valve_index):
         selected_objects = context.selected_objects
         for obj in selected_objects:
             if not mesh_create_basal(context, [obj]): return{'CANCELLED'}
-        return{'FINISHED'} """
-
-class MESH_OT_create_basal(bpy.types.Operator):
-    """Create basal region of ventricle using the position and angles of the heart valves"""
-    bl_idname = 'heart.create_basal'
-    bl_label = 'Create basal region of ventricle using the position and angles of the heart valves.'
-    def execute(self, context):
-        if not mesh_create_basal(context): return{'CANCELLED'}
         return{'FINISHED'} 
 
-"""def mesh_create_basal(context, selected_objects):
+def mesh_create_basal(context, selected_objects):
+    """Create Basal Regions for each of the selected objects"""
     if len(selected_objects) == 1:
         bpy.types.Scene.reference_object_name = selected_objects[0].name
     else:
@@ -926,35 +921,6 @@ class MESH_OT_create_basal(bpy.types.Operator):
         return False
     #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
     reference_copy = copy_object(selected_objects[0].name, 'basal_region')
-    # Deselect objects.
-    for obj in selected_objects: obj.select_set(False)
-    # Operations to create basal region of the ventricle.
-    basal_regions = create_basal_region_for_object(context, reference_copy)
-    if not basal_regions: 
-        cons_print(f"Error during the creation of the basal regions.")
-        return False # If an error ocurred during creation of basal region, dont continue.
-    # Cleanup.
-    # Reselect objects to state previous to this operation and deselect (and hide for performance) created objects.
-    for obj in selected_objects: obj.select_set(True)
-    for basal in basal_regions:  
-        basal.select_set(False)
-        basal.hide_set(True)
-    # Remove old basal region objects.
-    if context.scene.approach == 5: bpy.data.objects.remove(bpy.data.objects["basal_ref"], do_unlink=True)
-    bpy.data.objects.remove(bpy.data.objects["basal_region"], do_unlink=True)
-    bpy.data.objects.remove(bpy.data.objects["basal_region_poisson"], do_unlink=True)
-    return basal_regions"""
-
-def mesh_create_basal(context):
-    """Create basal region"""
-    cons_print("Create basal regions for selected ventricles...")
-    # Read selected objects.
-    if not context.selected_objects:
-        cons_print("No elements selected.")
-        return False
-    selected_objects = context.selected_objects
-    # Find object with mean volume and create a copy of it as a reference object to create the reference basal region from.
-    reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
     # Deselect objects.
     for obj in selected_objects: obj.select_set(False)
     # Operations to create basal region of the ventricle.
@@ -2495,7 +2461,6 @@ def find_ventricle_objects(objs):
     items.sort(key=lambda x: x[0])
     return [o for (_, o) in items]
 
-from mathutils.bvhtree import BVHTree
 def export_object_to_stl(obj, filepath, depsgraph=None):
     """Custom ASCII STL export for a single object."""
     if depsgraph is None:
@@ -2545,6 +2510,7 @@ class MESH_OT_object_transform(bpy.types.Operator):
             cons_print(f"No objects selected")
             return False
 
+        # ---  Picks a reference object as a basis to be transformed  ---
         max = 0
         for a in selected_objects:
             if len(bmesh.from_edit_mesh(a.data).verts) > max:
@@ -2558,25 +2524,42 @@ class MESH_OT_object_transform(bpy.types.Operator):
         for obj in selected_objects:
             if obj != source:
                 cons_print(f"current object target {obj.name}")
-                copied_source = copy_object(source.name, obj.name + "_transformed")
-                BvH_transform(copied_source,obj)
-                copied_source.data.update()
+                copied_source = copy_object(source.name, obj.name + "_transformed_CPD")
+                CPD_transform(copied_source,obj)
+
+                copied_source_bvh = copy_object(source.name, obj.name + "_transformed_BVH")
+                BvH_transform(copied_source_bvh,obj)
+                copied_source_bvh.data.update()
         cons_print(f"Operation completed")    
         return{"FINISHED"}
 
+def CPD_transform(source,target):
+    source_vert = []
+    for v in source.data.vertices:
+        source_vert.append(list(v.co[:]))
+
+    target_vert = []
+    for v in target.data.vertices:
+        target_vert.append(list(v.co[:]))
+
+    reg = RigidRegistration(X=np.asarray(target_vert), Y=np.asarray(source_vert))
+    TY, _ = reg.register()
+    for i in range(len(source.data.vertices)):
+        source.data.vertices[i].co = mathutils.Vector(TY[i])
+    source.data.update()
+
 def BvH_transform(source,target):
-    cons_print(f"source {source}")
-    cons_print(f"target {target}")
     bvh = BVHTree.FromObject(target, bpy.context.evaluated_depsgraph_get())
     
     for v in source.data.vertices:
         world_co = source.matrix_world @ v.co
 
-        loc, normal, index, dist = bvh.find_nearest(world_co)
+        loc, _, _, _ = bvh.find_nearest(world_co)
 
         if loc:
             v.co = source.matrix_world.inverted() @ loc
-    
+    cons_print(f"Transformation from {source} to {target} successful")
+
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 

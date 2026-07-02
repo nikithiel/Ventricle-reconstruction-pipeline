@@ -6,3 +6,6 @@ matplotlib
 PyQt5
 trimesh
 pandas
+
+# This is to keep track of what other python packages were used and to reference
+https://github.com/siavashk/pycpd
