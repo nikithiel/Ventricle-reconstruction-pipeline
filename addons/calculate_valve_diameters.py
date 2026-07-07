@@ -88,20 +88,22 @@ def read_velocity_csv(path: Path) -> pd.DataFrame:
     return df
 
 
-# Captures the LAST run of digits immediately before the '.stl' extension.
-# Anchoring to '\.stl$' means any prefix (case id, date such as 3.29.22,
-# anatomy label, ...) is ignored -- only the trailing frame number is used.
-_STL_INDEX_RE = re.compile(r"(\d+)\.stl$", re.IGNORECASE)
+# Captures the LAST run of digits at the end of the name, allowing trailing
+# non-digits such as a ')' before '.stl'. Any prefix (case id, date like
+# 3.29.22, anatomy label, ...) is ignored -- only the final frame number counts.
+_STL_INDEX_RE = re.compile(r"(\d+)[^\d]*\.stl$", re.IGNORECASE)
 
 
 def stl_index_from_name(name: str) -> Optional[int]:
     """
     Return the phase index encoded at the END of an STL filename, ignoring the
-    prefix. The index is the last digit run before the '.stl' extension:
+    prefix. It is the last digit run before '.stl' (trailing non-digits like a
+    ')' are allowed):
 
         'ventricle_7.stl'                             -> 7
         'CP RA 3.29.22_BeutelRevision+LVOT_000.stl'   -> 0
         'CP SJ 12.27.22_BeutelRevision+LVOT_042.stl'  -> 42
+        'NJ 1.11 (1).stl'                             -> 1
 
     Leading zeros are fine (int() strips them). Returns None when there is no
     trailing number (e.g. 'aorta_static.stl'), so such files are skipped.
@@ -196,16 +198,20 @@ def compute_volume_vs_phase_from_stl(stl_dir: Path, pattern: Optional[str] = Non
     items = discover_phase_stls(stl_dir, pattern=pattern)   # [(idx, path), ...] sorted
     idxs = [idx for idx, _ in items]
 
-    N = max(idxs)
-    if N <= 0:
+    # Normalize phase by the actual index span, so a series that starts at 0 OR
+    # at 1 (or any offset) both map to phi in [0, 1]. For a 0-based series this
+    # is identical to the old idx / max(idx).
+    idx_min, idx_max = min(idxs), max(idxs)
+    span = idx_max - idx_min
+    if span <= 0:
         raise ValueError(
-            f"Need at least two phase frames with indices like _000, _001, ... "
-            f"in {stl_dir} (got max index N={N})."
+            f"Need at least two distinct phase frames in {stl_dir} "
+            f"(got indices {sorted(set(idxs))})."
         )
 
     records: List[Tuple[int, float, float]] = []
     for idx, f in items:
-        phi = float(idx) / float(N)
+        phi = float(idx - idx_min) / float(span)
 
         mesh = trimesh.load_mesh(f, force="mesh")
         if hasattr(mesh, "is_watertight") and not mesh.is_watertight:
