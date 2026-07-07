@@ -715,26 +715,6 @@ def find_valve_files(case_dir: Path) -> Tuple[Optional[Path], Optional[Path]]:
     return av, mv
 
 
-def detect_case_folders(root: Path) -> List[Path]:
-    case_dirs = []
-    for d in root.rglob("*"):
-        if not d.is_dir():
-            continue
-        av, mv = find_valve_files(d)
-        if av is None or mv is None:
-            continue
-        if not (d / "STL").is_dir():
-            continue
-        # require at least one numbered STL frame (any prefix, e.g. *_000.stl)
-        if not any(
-            p.is_file() and stl_index_from_name(p.name) is not None
-            for p in (d / "STL").iterdir()
-        ):
-            continue
-        case_dirs.append(d)
-    return sorted(set(case_dirs))
-
-
 def resolve_case_dir(stl_dir: Path) -> Path:
     """
     Locate the 'case' folder that holds inputPython.txt and the AV/MV CSVs.
