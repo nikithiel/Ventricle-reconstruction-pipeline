@@ -88,45 +88,123 @@ def read_velocity_csv(path: Path) -> pd.DataFrame:
     return df
 
 
+# Captures the LAST run of digits immediately before the '.stl' extension.
+# Anchoring to '\.stl$' means any prefix (case id, date such as 3.29.22,
+# anatomy label, ...) is ignored -- only the trailing frame number is used.
+_STL_INDEX_RE = re.compile(r"(\d+)\.stl$", re.IGNORECASE)
+
+
 def stl_index_from_name(name: str) -> Optional[int]:
-    # expects ventricle_<idx>.stl
-    m = re.search(r"^ventricle_(\d+)\.stl$", name.lower())
+    """
+    Return the phase index encoded at the END of an STL filename, ignoring the
+    prefix. The index is the last digit run before the '.stl' extension:
+
+        'ventricle_7.stl'                             -> 7
+        'CP RA 3.29.22_BeutelRevision+LVOT_000.stl'   -> 0
+        'CP SJ 12.27.22_BeutelRevision+LVOT_042.stl'  -> 42
+
+    Leading zeros are fine (int() strips them). Returns None when there is no
+    trailing number (e.g. 'aorta_static.stl'), so such files are skipped.
+    """
+    m = _STL_INDEX_RE.search(name)
     return int(m.group(1)) if m else None
 
 
-def compute_volume_vs_phase_from_stl(stl_dir: Path) -> pd.DataFrame:
+def stl_series_prefix(name: str) -> Optional[str]:
     """
-    Reads ONLY ventricle_*.stl, computes volume and phase phi in [0,1].
+    Everything before the trailing numeric index. Used to group frames that
+    belong to the same series so a folder may also hold unrelated meshes.
+    Returns None when there is no trailing number.
+    """
+    m = _STL_INDEX_RE.search(name)
+    return name[: m.start(1)] if m else None
+
+
+def discover_phase_stls(stl_dir: Path, pattern: Optional[str] = None) -> List[Tuple[int, Path]]:
+    """
+    Find the ventricle phase STL series in `stl_dir`, robust to naming.
+
+    Any file ending in '<digits>.stl' (any case) is a candidate frame.
+    Candidates are grouped by the text preceding those digits (the 'series
+    prefix'), so the folder is allowed to contain unrelated meshes too. If more
+    than one series is present, the longest one is used (preferring a series
+    that starts at index 0) and a warning names what was skipped.
+
+    Pass `pattern` (a glob such as '*LVOT_*.stl') to restrict the search
+    explicitly if auto-detection ever picks the wrong series.
+
+    Returns [(index, path), ...] sorted by index, with duplicate indices dropped.
+    """
+    files_iter = stl_dir.glob(pattern) if pattern else stl_dir.iterdir()
+
+    series: Dict[str, List[Tuple[int, Path]]] = {}
+    for f in files_iter:
+        if not f.is_file():
+            continue
+        idx = stl_index_from_name(f.name)
+        if idx is None:
+            continue
+        series.setdefault(stl_series_prefix(f.name), []).append((idx, f))
+
+    if not series:
+        raise FileNotFoundError(
+            f"No numbered STL frames (e.g. '..._000.stl') found in: {stl_dir}"
+        )
+
+    # Prefer the longest series; break ties toward one that starts at index 0,
+    # then by prefix name so the choice is deterministic.
+    def series_key(prefix: str) -> Tuple[int, bool, str]:
+        idxs = [i for i, _ in series[prefix]]
+        return (len(series[prefix]), min(idxs) == 0, prefix)
+
+    chosen = max(series, key=series_key)
+    if len(series) > 1:
+        skipped = sorted(p for p in series if p != chosen)
+        warnings.warn(
+            f"Multiple STL series in {stl_dir}: {sorted(series)!r}. "
+            f"Using prefix {chosen!r} ({len(series[chosen])} frames); "
+            f"ignoring {skipped!r}. Pass `pattern=...` to override."
+        )
+
+    # De-duplicate indices (keep first seen), then sort by index.
+    by_idx: Dict[int, Path] = {}
+    for idx, f in series[chosen]:
+        if idx in by_idx:
+            warnings.warn(
+                f"Duplicate phase index {idx} in {stl_dir}: keeping "
+                f"'{by_idx[idx].name}', ignoring '{f.name}'."
+            )
+            continue
+        by_idx[idx] = f
+
+    return sorted(by_idx.items())
+
+
+def compute_volume_vs_phase_from_stl(stl_dir: Path, pattern: Optional[str] = None) -> pd.DataFrame:
+    """
+    Reads the ventricle phase STL series, computes volume and phase phi in [0,1].
+
+    Filenames are auto-detected via discover_phase_stls, so both the legacy
+    'ventricle_<idx>.stl' and arbitrary '<prefix>_<idx>.stl' (e.g.
+    'CP RA 3.29.22_BeutelRevision+LVOT_000.stl') work with no code changes.
+    Pass `pattern` to force a specific glob if needed.
+
     Time is NOT assigned here (because you have bpm_mv and bpm_av separately).
 
     Returns columns: idx, phi, V
     """
-    stl_files = sorted(stl_dir.glob("ventricle_*.stl"))
-    if not stl_files:
-        raise FileNotFoundError(f"No ventricle_*.stl files found in: {stl_dir}")
-
-    idxs: List[int] = []
-    files: List[Path] = []
-    for f in stl_files:
-        idx = stl_index_from_name(f.name)
-        if idx is None:
-            continue
-        idxs.append(idx)
-        files.append(f)
-
-    if not files:
-        raise FileNotFoundError(f"Found ventricle_*.stl but none matched ventricle_<index>.stl in {stl_dir}")
-
-    order = np.argsort(idxs)
-    idxs = [idxs[i] for i in order]
-    files = [files[i] for i in order]
+    items = discover_phase_stls(stl_dir, pattern=pattern)   # [(idx, path), ...] sorted
+    idxs = [idx for idx, _ in items]
 
     N = max(idxs)
     if N <= 0:
-        raise ValueError(f"Max ventricle index N={N} not valid in {stl_dir}")
+        raise ValueError(
+            f"Need at least two phase frames with indices like _000, _001, ... "
+            f"in {stl_dir} (got max index N={N})."
+        )
 
     records: List[Tuple[int, float, float]] = []
-    for idx, f in zip(idxs, files):
+    for idx, f in items:
         phi = float(idx) / float(N)
 
         mesh = trimesh.load_mesh(f, force="mesh")
@@ -647,14 +725,46 @@ def detect_case_folders(root: Path) -> List[Path]:
             continue
         if not (d / "STL").is_dir():
             continue
-        # require at least one ventricle STL file
-        if not any((d / "STL").glob("ventricle_*.stl")):
+        # require at least one numbered STL frame (any prefix, e.g. *_000.stl)
+        if not any(
+            p.is_file() and stl_index_from_name(p.name) is not None
+            for p in (d / "STL").iterdir()
+        ):
             continue
         case_dirs.append(d)
     return sorted(set(case_dirs))
 
 
-def process_case(case_dir: Path, n_phase: int = 400) -> CaseData:
+def resolve_case_dir(stl_dir: Path) -> Path:
+    """
+    Locate the 'case' folder that holds inputPython.txt and the AV/MV CSVs.
+
+    You point the script at the folder containing the mesh frames (your Blender
+    '/STL/' export). The case-level inputs may sit right there (flat layout) or
+    one level up in the parent case folder. This returns whichever of
+    {stl_dir, stl_dir.parent} actually contains those inputs, preferring
+    stl_dir. Falls back to the parent (with a warning) if neither does.
+    """
+    def has_inputs(d: Path) -> bool:
+        av, mv = find_valve_files(d)
+        return (d / "inputPython.txt").exists() or av is not None or mv is not None
+
+    if has_inputs(stl_dir):
+        return stl_dir
+    if has_inputs(stl_dir.parent):
+        return stl_dir.parent
+    warnings.warn(
+        f"Could not find inputPython.txt or *_AV/_MV.csv in {stl_dir} "
+        f"or its parent {stl_dir.parent}. Using the parent as the case folder."
+    )
+    return stl_dir.parent
+
+
+def process_case(case_dir: Path, n_phase: int = 400, stl_dir: Optional[Path] = None) -> CaseData:
+    # case_dir -> holds inputPython.txt, the AV/MV CSVs, and receives the outputs
+    # stl_dir  -> holds the mesh frames; defaults to case_dir (flat layout)
+    if stl_dir is None:
+        stl_dir = case_dir
 
     fit: Dict[str, object] = {}
     params = parse_inputpython_txt(case_dir / "inputPython.txt")
@@ -665,7 +775,6 @@ def process_case(case_dir: Path, n_phase: int = 400) -> CaseData:
     av_df = read_velocity_csv(av_file) if av_file else None
     mv_df = read_velocity_csv(mv_file) if mv_file else None
 
-    stl_dir = case_dir 
     vol_df = compute_volume_vs_phase_from_stl(stl_dir)
     vol_df = smooth_and_dVdphi(vol_df, polyorder = 3)
 
@@ -858,7 +967,7 @@ def process_case(case_dir: Path, n_phase: int = 400) -> CaseData:
     axs[1].legend(loc="best")
 
     fig.suptitle(f"Case: {case_dir.name} (bpm_mv={bpm_mv}, bpm_av={bpm_av})")
-    fig.savefig(os.path.join(stl_dir,"calc_valve_diameters_outputs") + "/" + f"{case_dir.name}_fitted.png", dpi=150, bbox_inches="tight")
+    fig.savefig(os.path.join(case_dir, "calc_valve_diameters_outputs", f"{case_dir.name}_fitted.png"), dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return CaseData(
@@ -884,14 +993,21 @@ def cases_to_jsonable(cases: Dict[str, CaseData]) -> Dict[str, object]:
         out[k] = d
     return out
 
-def main_calc_diameter(root,n_phase):
-    os.makedirs(os.path.join(root,"calc_valve_diameters_outputs"),exist_ok=True)
-    root = Path(root)
+def main_calc_diameter(root, n_phase):
+    # `root` is the folder you point Blender at -- the one holding the mesh
+    # frames (your '/STL/' export). inputPython.txt and the AV/MV CSVs may sit
+    # there or one level up; resolve_case_dir figures out which. All outputs go
+    # under the resolved case folder.
+    stl_dir = Path(root)
+    case_dir = resolve_case_dir(stl_dir)
+
+    out_dir = case_dir / "calc_valve_diameters_outputs"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     figs = []
     summary_rows = []
 
-    case, _ = process_case(root, n_phase=n_phase)
+    case, _ = process_case(case_dir, n_phase=n_phase, stl_dir=stl_dir)
     #figs.append(fig)
     summary_rows.append({
         "r_MV_minor": case.fit.get("d_MV_minor", np.nan)/2,
@@ -907,6 +1023,6 @@ def main_calc_diameter(root,n_phase):
         "d_AV": case.fit.get("d_AV", np.nan),
     })
 
-    pd.DataFrame(summary_rows).to_csv(os.path.join(root,"calc_valve_diameters_outputs") + "/summary.csv", index=False)
+    pd.DataFrame(summary_rows).to_csv(out_dir / "summary.csv", index=False)
     
     return figs, (case.fit.get("d_MV_minor", np.nan)/2, case.fit.get("d_MV_major", np.nan)/2, case.fit.get("d_AV", np.nan)/2)
