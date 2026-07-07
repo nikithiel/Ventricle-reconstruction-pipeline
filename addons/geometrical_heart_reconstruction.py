@@ -2145,48 +2145,37 @@ class MESH_OT_quick_reset(bpy.types.Operator):
     bl_idname = 'heart.quick_reset'
     bl_label = 'Quick reset'
 
-    def execute(self,context):
+    def execute(self, context):
         scene = context.scene
         view_layer = context.view_layer
-        
+
         import_dir_raw = bpy.path.abspath((scene.ventricle_import_dir or "").strip())
-        if not os.path.isdir(os.path.join(import_dir_raw,'rotated')): 
+        if not import_dir_raw:
+            import_dir_raw = "//"
+        temp_path = os.path.join(bpy.path.abspath(import_dir_raw), 'rotated')
+
+        if not os.path.isdir(temp_path):
             cons_print("No temporary savestate found.")
             return {'CANCELLED'}
 
-        # ------------------------------------------------------------------
-        # 1) Wipe the selected vertices
-        # ------------------------------------------------------------------
-        # --- Remember original selection & active object, also which meshes were selected ---
-        original_selection = list(context.selected_objects)
-        original_active = view_layer.objects.active
-        selected_meshes_for_stl = [obj for obj in original_selection if obj.type == 'MESH']
+        # 1) Alle Objekte der obersten Ebene löschen.
+        #    scene.collection.objects = nur die direkt in der Wurzel liegenden
+        #    Objekte; Unter-Collections und deren Inhalt bleiben unberührt.
+        #    list(...) als Snapshot, da wir während des Löschens iterieren.
+        for obj in list(scene.collection.objects):
+            bpy.data.objects.remove(obj, do_unlink=True)
 
-        def restore_selection():
-            bpy.ops.object.select_all(action='DESELECT')
+        # 2) Reimport. Wurzel-Collection aktiv setzen, damit die neuen
+        #    Objekte wieder auf oberster Ebene landen und ein erneuter
+        #    Reset sie ebenfalls erfasst.
+        view_layer.active_layer_collection = view_layer.layer_collection
 
-            # Reselect original objects (only if they still exist)
-            for obj in original_selection:
-                if obj and obj.name in view_layer.objects:
-                    view_layer.objects[obj.name].select_set(True)
+        skip = {"Connectivity", "ventricle_export_manifest.txt"}
+        for name in sorted(os.listdir(temp_path)):
+            if name in skip or not name.lower().endswith(".stl"):
+                continue
+            bpy.ops.import_mesh.stl(filepath=os.path.join(temp_path, name))
 
-            # Restore active object if it still exists
-            if original_active and original_active.name in view_layer.objects:
-                view_layer.objects.active = view_layer.objects[original_active.name]
-        ventricles = find_ventricle_objects(original_selection)
-        for obj in ventricles:    
-            obj.select_set(True)
-        bpy.ops.object.delete()
-
-        # ------------------------------------------------------------------
-        # 2) Reimport everything
-        # ------------------------------------------------------------------
-        # Reimports after wiping the ventricles
-        if not import_dir_raw:
-            import_dir_raw = "//"
-        temp_path = os.path.join(import_dir_raw,'rotated')
-        for name in os.listdir(temp_path):
-            if not name=="Connectivity" and not name == "ventricle_export_manifest.txt": bpy.ops.import_mesh.stl(filepath=os.path.join(temp_path,name))
         return {'FINISHED'}
 
 class MESH_OT_export_ventricle(bpy.types.Operator):
@@ -2449,8 +2438,8 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
         
         figs, res = main_calc_diameter(diam_dir_raw, 400)
         
-        context.scene.mitral_radius_long = res[0] * 1000
-        context.scene.mitral_radius_small = res[1] * 1000
+        context.scene.mitral_radius_small = res[0] * 1000
+        context.scene.mitral_radius_long = res[1] * 1000
         context.scene.aortic_radius = res[2] * 1000
         
         
