@@ -1981,9 +1981,9 @@ class PANEL_Valves(bpy.types.Panel):
         row = layout.row()
         row.prop(context.scene, 'aortic_radius', text="Aortic radius", icon='META_BALL')
         if dev_env_tools:
-            # Calculate Valve Diameter
+            # Calculate Valve Radii
             row = layout.row()
-            row.operator('heart.calculate_valve_diameter', text = "Calculate Diameter", icon = "MESH_CIRCLE")
+            row.operator('heart.calculate_valve_diameter', text = "Calculate Radii", icon = "MESH_CIRCLE")
             row = layout.row()
             layout.operator('heart.build_valve',  text= "Add valve interface nodes", icon = 'PROP_OFF')
             row = layout.row()
