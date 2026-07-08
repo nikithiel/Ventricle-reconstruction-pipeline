@@ -183,13 +183,13 @@ By selecting multiple meshes with similar orientation, this button picks a mesh 
 
 # Comparison of volume curves (raw vs. reconstructed)
 ![Image of the plotting functionality](/readme_images/Plot_function.png)\
-This panel (labelled **"Comparison of volume curves"** in the *Development tools* panel) compares the left-ventricular **volume over the cardiac cycle** of your **raw input data** against the **reconstructed geometries** produced by this pipeline. It draws three curves — the raw frames, the reconstructed frames, and the temporally interpolated reconstruction — and marks end-diastole (**ED**, volume maximum) and end-systole (**ES**, volume minimum). Use it to judge how well the reconstruction preserves the volume dynamics.
+This panel (labelled **"Comparison of volume curves"** in the *Development tools* panel) compares the left-ventricular **volume over the cardiac cycle** of your **raw input data** against the **reconstructed geometries** produced by this pipeline. It draws three curves — the raw frames, the reconstructed frames, and the temporally interpolated reconstruction — and marks end-diastole (**ED**, volume maximum) and end-systole (**ES**, volume minimum). Use it to judge how well the reconstruction preserves the volume dynamics. Two modes are available: the default **file-based** comparison against an exported folder, and a **Live** mode (below) that compares the ventricles currently in your scene without exporting first.
 
 Volumes are computed from the mesh **connectivity** (`Connectivity/*.txt`), not from the STL files directly, so both the raw and the reconstructed side must have been exported together with their `Connectivity/` folder (see the structure below).
 
 **Prerequisites**
 - Run **"Translate and rotate"** first — it writes the raw, aligned data (including its `Connectivity/`) into `<Import folder>/rotated/`.
-- **Export** the reconstructed ventricles (**"Export ventricle"**) so the processed geometries also have a `Connectivity/` folder.
+- **Export** the reconstructed ventricles (**"Export ventricle"**) so the processed geometries also have a `Connectivity/` folder. *(File-based mode only — skipped in **Live** mode.)*
 
 **Inputs — set these before running**
 - **Import folder** (in the *File* panel) — points at the raw STL frames. The raw comparison data is taken from `<Import folder>/rotated/`. If that folder is missing, you are asked to run *Translate and rotate* first.
@@ -204,6 +204,13 @@ Volumes are computed from the mesh **connectivity** (`Connectivity/*.txt`), not 
 - `volume_curve_comparison.png` — the plotted curves
 - `_volume_frames_volumes.csv` — per-frame volumes of the reconstructed geometry
 - `_volume_interp_volumes.csv` — the interpolated volume curve
+
+### Live mode — compare the current selection (no export needed)
+Tick **Live comparison** to compare the ventricles **currently in your scene** against the raw data, without exporting first (only *Translate and rotate* is required, for the raw side).
+- **Objects used:** if a complete frame set (`ventricle_0 … ventricle_N-1`) is selected, that selection is used; otherwise all top-level `ventricle_*` meshes in the scene are taken automatically. A wrong count or a mismatched topology between frames is reported to the System Console and nothing is plotted.
+- **Processed geometries** and **Save** are disabled in this mode — use **Show**.
+- **Outputs** go to a fresh folder under Blender's temp directory (`gvr_live_compare_<id>/`), holding `Connectivity/` and the same `volume_comparison/` PNG + CSVs that *Save* produces. The exact path is printed to the System Console.
+- **Delete temp after showing:** when ticked, that temp folder is removed after you close the interactive plot (or after the PNG image opens); when unticked it is kept until Blender exits.
 
 If a required input is missing (no `rotated/`, no `inputPython.txt`, or no valid *Processed geometries* folder), a clear warning is printed to the Blender **System Console** (`Window → Toggle System Console`) and nothing is plotted.
 

@@ -19,6 +19,8 @@ import mathutils
 import open3d as o3d
 import os
 import re
+import shutil
+import uuid
 
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -205,59 +207,19 @@ class MESH_OT_ventricle_rotate(bpy.types.Operator):
             return {'CANCELLED'}
 
         # ------------------------------------------------------------------
-        # 4) Export connectivity (faces) from the first ventricle
+        # 4) Export connectivity (faces from ventricles[0]) + per-frame vertices
         # ------------------------------------------------------------------
-        ref_obj = ventricles[0]
-        mesh = ref_obj.data
-
-        # Ensure mesh is triangulated (for connectivity consistency)
-        for poly in mesh.polygons:
-            if len(poly.vertices) != 3:
-                cons_print(
-                    f"Export ventricle: non-triangular face {poly.index} in "
-                    f"'{ref_obj.name}'. Please triangulate the mesh first."
-                )
-                restore_selection()
-                return {'CANCELLED'}
-
-        faces_path = os.path.join(connectivity_dir, "ventricle_faces.txt")
-        try:
-            with open(faces_path, "w") as f:
-                for poly in mesh.polygons:
-                    v0, v1, v2 = poly.vertices
-                    f.write(f"{v0} {v1} {v2}\n")
-        except Exception as e:
-            cons_print(f"Export ventricle: error writing faces file: {e}")
+        if not write_ventricle_connectivity(ventricles, connectivity_dir, triangulate=False):
             restore_selection()
             return {'CANCELLED'}
 
         # ------------------------------------------------------------------
-        # 5) Export per-frame vertex coordinates for ventricles
-        #    ALWAYS named ventricle_verts_0, ventricle_verts_1, ...
-        #    Also collect data for the manifest.
+        # 5) Collect manifest entries (ventricle_verts_0, ventricle_verts_1, ...)
         # ------------------------------------------------------------------
-        manifest_entries = []  # (index, stl_file, verts_file, source_name)
-
-        for export_index, obj in enumerate(ventricles):
-            verts_filename = f"ventricle_verts_{export_index}.txt"
-            verts_path = os.path.join(connectivity_dir, verts_filename)
-
-            try:
-                with open(verts_path, "w") as f:
-                    for v in obj.data.vertices:
-                        co_world = obj.matrix_world @ v.co
-                        f.write(f"{co_world.x:.8f} {co_world.y:.8f} {co_world.z:.8f}\n")
-            except Exception as e:
-                cons_print(
-                    f"Export ventricle: error writing vertices for '{obj.name}': {e}"
-                )
-                restore_selection()
-                return {'CANCELLED'}
-
-            stl_filename = f"ventricle_{export_index}.stl"
-            manifest_entries.append(
-                (export_index, stl_filename, os.path.join("Connectivity", verts_filename), obj.name)
-            )
+        manifest_entries = [
+            (i, f"ventricle_{i}.stl", os.path.join("Connectivity", f"ventricle_verts_{i}.txt"), obj.name)
+            for i, obj in enumerate(ventricles)
+        ]
 
         # ------------------------------------------------------------------
         # 6) Restore original selection (for user convenience)
@@ -2133,13 +2095,22 @@ class PANEL_Dev_tools(bpy.types.Panel):
         
         row = layout.row()
         layout.label(text='Comparison of volume curves')
-        # Plot STL setting file
+        # Live mode: compare the current selection instead of an exported folder
         row = layout.row()
+        row.prop(context.scene, "live_compare", text = "Live (current selection)")
+        row = layout.row()
+        row.enabled = context.scene.live_compare
+        row.prop(context.scene, "live_delete_temp", text = "Delete temp after showing")
+        # Plot STL setting file (disabled in live mode)
+        row = layout.row()
+        row.enabled = not context.scene.live_compare
         row.prop(context.scene, "plot_input_path", text = "Processed geometries")
         # Plot STL and display
         row = layout.row(align=True)
         row.operator('heart.plot_stl', text = "Show", icon = 'AXIS_FRONT')
-        row.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
+        sub = row.row(align=True)
+        sub.enabled = not context.scene.live_compare
+        sub.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
         # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
         row = layout.row(align=True)
         row.operator('heart.object_transform', text = "Transform Objects", icon = "SHAPEKEY_DATA")
@@ -2270,59 +2241,19 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
             return {'CANCELLED'}
 
         # ------------------------------------------------------------------
-        # 4) Export connectivity (faces) from the first ventricle
+        # 4) Export connectivity (faces from ventricles[0]) + per-frame vertices
         # ------------------------------------------------------------------
-        ref_obj = ventricles[0]
-        mesh = ref_obj.data
-
-        # Ensure mesh is triangulated (for connectivity consistency)
-        for poly in mesh.polygons:
-            if len(poly.vertices) != 3:
-                cons_print(
-                    f"Export ventricle: non-triangular face {poly.index} in "
-                    f"'{ref_obj.name}'. Please triangulate the mesh first."
-                )
-                restore_selection()
-                return {'CANCELLED'}
-
-        faces_path = os.path.join(connectivity_dir, "ventricle_faces.txt")
-        try:
-            with open(faces_path, "w") as f:
-                for poly in mesh.polygons:
-                    v0, v1, v2 = poly.vertices
-                    f.write(f"{v0} {v1} {v2}\n")
-        except Exception as e:
-            cons_print(f"Export ventricle: error writing faces file: {e}")
+        if not write_ventricle_connectivity(ventricles, connectivity_dir, triangulate=False):
             restore_selection()
             return {'CANCELLED'}
 
         # ------------------------------------------------------------------
-        # 5) Export per-frame vertex coordinates for ventricles
-        #    ALWAYS named ventricle_verts_0, ventricle_verts_1, ...
-        #    Also collect data for the manifest.
+        # 5) Collect manifest entries (ventricle_verts_0, ventricle_verts_1, ...)
         # ------------------------------------------------------------------
-        manifest_entries = []  # (index, stl_file, verts_file, source_name)
-
-        for export_index, obj in enumerate(ventricles):
-            verts_filename = f"ventricle_verts_{export_index}.txt"
-            verts_path = os.path.join(connectivity_dir, verts_filename)
-
-            try:
-                with open(verts_path, "w") as f:
-                    for v in obj.data.vertices:
-                        co_world = obj.matrix_world @ v.co
-                        f.write(f"{co_world.x:.8f} {co_world.y:.8f} {co_world.z:.8f}\n")
-            except Exception as e:
-                cons_print(
-                    f"Export ventricle: error writing vertices for '{obj.name}': {e}"
-                )
-                restore_selection()
-                return {'CANCELLED'}
-
-            stl_filename = f"ventricle_{export_index}.stl"
-            manifest_entries.append(
-                (export_index, stl_filename, os.path.join("Connectivity", verts_filename), obj.name)
-            )
+        manifest_entries = [
+            (i, f"ventricle_{i}.stl", os.path.join("Connectivity", f"ventricle_verts_{i}.txt"), obj.name)
+            for i, obj in enumerate(ventricles)
+        ]
 
         # ------------------------------------------------------------------
         # 6) Restore original selection (for user convenience)
@@ -2374,17 +2305,17 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
 
         return {'FINISHED'}
 
-def resolve_volume_comparison_paths(scene):
-    """Resolve and validate all inputs for the volume-curve comparison.
+def resolve_raw_and_settings_paths(scene):
+    """Resolve and validate the raw-data + settings inputs shared by every volume-curve
+    comparison, independent of the 'Processed geometries' folder.
 
     Folder layout:
       <Import folder>        = the STL frames folder (ventricle_import_dir)
         rotated/             = raw data, created by 'Translate and rotate'
       <Import folder>/..     = case folder, holds inputPython.txt (one level above)
-      <Processed geometries> = reconstructed geometries (ventricle_export_dir); may live anywhere
 
-    Returns a dict (inputsetting, plot_input_dir, rotated_dir, interpolMethod) on success,
-    or None after printing a user-facing warning if a required input is missing.
+    Returns a dict (inputsetting, rotated_dir) on success, or None after printing a
+    user-facing warning if a required input is missing.
     """
     import_dir = bpy.path.abspath((scene.ventricle_import_dir or "").strip())
 
@@ -2412,6 +2343,25 @@ def resolve_volume_comparison_paths(scene):
             f"('{import_dir}') or one level above it."
         )
         return None
+
+    return {
+        "inputsetting": inputsetting,
+        "rotated_dir": rotated_dir,
+    }
+
+def resolve_volume_comparison_paths(scene):
+    """Resolve and validate all inputs for the file-based volume-curve comparison.
+
+    Extends resolve_raw_and_settings_paths with the 'Processed geometries' folder
+    (<Processed geometries> = reconstructed geometries / ventricle_export_dir; may live anywhere).
+    Returns a dict (inputsetting, plot_input_dir, rotated_dir, interpolMethod) on success,
+    or None after printing a user-facing warning if a required input is missing.
+    """
+    base = resolve_raw_and_settings_paths(scene)
+    if base is None:
+        return None
+    inputsetting = base["inputsetting"]
+    rotated_dir = base["rotated_dir"]
 
     # (3) Processed geometries: use 'Processed geometries' path, else fall back to Export folder
     processed_raw = (scene.plot_input_path or "").strip()
@@ -2452,42 +2402,135 @@ class MESH_OT_plot_STL(bpy.types.Operator):
     bl_label = 'plot STL files'
     
     def execute(self,context):
-        paths = resolve_volume_comparison_paths(context.scene)
-        if paths is None:
-            return {'CANCELLED'}
+        scene = context.scene
+        click_dir = None
+        if scene.live_compare:
+            # Live mode: build a throwaway Connectivity folder from the current selection
+            # (not yet exported) and feed that to the same file-based comparison path.
+            base = resolve_raw_and_settings_paths(scene)
+            if base is None:
+                return {'CANCELLED'}
+            if context.mode != 'OBJECT':
+                cons_print("Live comparison: please switch to Object Mode first.")
+                return {'CANCELLED'}
+            (_, _, sFrameID, eFrameID, numFrame, _, interpolMethod) = \
+                parseRunTimeVariables_unique(base["inputsetting"])
+            # Prefer a complete frame set from the current selection; otherwise fall back to
+            # all top-level ventricle_* meshes (direct children of the Scene Collection, no
+            # sub-collections). Covers "nothing selected" and "one stray object left selected
+            # by a previous operation".
+            def _is_full_frame_set(cand):
+                cand_idx = sorted(get_ventricle_index_from_name(o.name) for o in cand)
+                return len(cand) == numFrame and cand_idx == list(range(numFrame))
 
-        # A figure's canvas is bound to the backend active when it is created, and
-        # calculate_valve_diameters forces 'Agg' at import. So try to activate an
-        # interactive Qt backend BEFORE building the figure. If no Qt binding is
-        # available this stays on Agg and we fall back to a temp PNG opened with the
-        # OS default viewer, so 'Show' works on every machine.
-        non_gui = {"agg", "cairo", "pdf", "pgf", "ps", "svg", "template"}
-        if matplotlib.get_backend().lower() in non_gui:
-            try:
-                plt.switch_backend("QtAgg")
-            except Exception as e:
-                cons_print(f"Volume comparison: no interactive backend ({e}); using PNG fallback.")
-
-        _,_,_, fig = derive_ed_es_from_volume_curve(
-            paths["inputsetting"], paths["plot_input_dir"], paths["rotated_dir"],
-            paths["interpolMethod"], "volume", False)
-
-        def _open_as_png():
-            tmp_png = os.path.join(bpy.app.tempdir, "volume_curve_comparison.png")
-            fig.savefig(tmp_png)
-            plt.close(fig)
-            bpy.ops.wm.path_open(filepath=tmp_png)
-            cons_print(f"Volume comparison: opened '{tmp_png}'.")
-
-        if matplotlib.get_backend().lower() in non_gui:
-            _open_as_png()
+            objs = find_ventricle_objects(context.selected_objects)
+            if not _is_full_frame_set(objs):
+                objs = find_ventricle_objects(scene.collection.objects)
+                if objs:
+                    cons_print(
+                        f"Live comparison: no complete set selected; using all {len(objs)} "
+                        f"top-level ventricle_* object(s) in the scene."
+                    )
+            if not objs:
+                cons_print(
+                    "Live comparison: no ventricle_* meshes found (neither selected nor at the "
+                    "top level of the scene)."
+                )
+                return {'CANCELLED'}
+            indices = [get_ventricle_index_from_name(o.name) for o in objs]
+            if len(objs) != numFrame or sorted(indices) != list(range(numFrame)):
+                cons_print(
+                    f"Live comparison: need exactly ventricle_0..ventricle_{numFrame - 1} "
+                    f"({numFrame} frames from inputPython.txt); got {len(objs)} with indices {sorted(indices)}."
+                )
+                return {'CANCELLED'}
+            # Read-only topology consistency: derive uses ONE faces array for every frame,
+            # so each selected object must share the reference's vertex order and connectivity.
+            ref = objs[0]
+            ref_polys = [tuple(p.vertices) for p in ref.data.polygons]
+            for o in objs[1:]:
+                if (len(o.data.vertices) != len(ref.data.vertices)
+                        or len(o.data.polygons) != len(ref.data.polygons)
+                        or [tuple(p.vertices) for p in o.data.polygons] != ref_polys):
+                    cons_print(
+                        f"Live comparison: '{o.name}' has a different topology than '{ref.name}'. "
+                        f"All frames must share one topology."
+                    )
+                    return {'CANCELLED'}
+            # New unique per-click temp folder; it only ever holds Connectivity.
+            click_dir = os.path.join(bpy.app.tempdir, f"gvr_live_compare_{uuid.uuid4().hex}")
+            conn_dir = os.path.join(click_dir, "Connectivity")
+            os.makedirs(conn_dir, exist_ok=True)
+            if not write_ventricle_connectivity(objs, conn_dir, triangulate=True, start_index=sFrameID):
+                if scene.live_delete_temp:
+                    shutil.rmtree(click_dir, ignore_errors=True)
+                return {'CANCELLED'}
+            # derive (save_csv=True) writes its CSVs into <plot_input_dir>/volume_comparison/;
+            # create it so the plot + CSVs land next to the temp connectivity.
+            os.makedirs(os.path.join(click_dir, "volume_comparison"), exist_ok=True)
+            inputsetting = base["inputsetting"]
+            plot_input_dir = click_dir
+            rotated_dir = base["rotated_dir"]
+            save_flag = True
         else:
-            try:
-                plt.show(block=True)
+            paths = resolve_volume_comparison_paths(scene)
+            if paths is None:
+                return {'CANCELLED'}
+            inputsetting = paths["inputsetting"]
+            plot_input_dir = paths["plot_input_dir"]
+            rotated_dir = paths["rotated_dir"]
+            interpolMethod = paths["interpolMethod"]
+            save_flag = False
+
+        try:
+            # A figure's canvas is bound to the backend active when it is created, and
+            # calculate_valve_diameters forces 'Agg' at import. So try to activate an
+            # interactive Qt backend BEFORE building the figure. If no Qt binding is
+            # available this stays on Agg and we fall back to a temp PNG opened with the
+            # OS default viewer, so 'Show' works on every machine.
+            non_gui = {"agg", "cairo", "pdf", "pgf", "ps", "svg", "template"}
+            if matplotlib.get_backend().lower() in non_gui:
+                try:
+                    plt.switch_backend("QtAgg")
+                except Exception as e:
+                    cons_print(f"Volume comparison: no interactive backend ({e}); using PNG fallback.")
+
+            _,_,_, fig = derive_ed_es_from_volume_curve(
+                inputsetting, plot_input_dir, rotated_dir,
+                interpolMethod, "volume", save_flag)
+
+            if scene.live_compare:
+                # Save the plot next to the CSVs derive just wrote, mirroring the 'Save'
+                # button but into the throwaway temp folder.
+                fig.savefig(os.path.join(click_dir, "volume_comparison", "volume_curve_comparison.png"))
+                if scene.live_delete_temp:
+                    if matplotlib.get_backend().lower() in non_gui:
+                        note = "deleted after the plot image is opened"
+                    else:
+                        note = "deleted after the interactive plot is closed"
+                    cons_print(f"Live comparison: output (Connectivity + volume_comparison) in '{click_dir}' ({note}).")
+                else:
+                    cons_print(f"Live comparison: output (Connectivity + volume_comparison) kept in '{click_dir}' (removed when Blender exits).")
+
+            def _open_as_png():
+                tmp_png = os.path.join(bpy.app.tempdir, "volume_curve_comparison.png")
+                fig.savefig(tmp_png)
                 plt.close(fig)
-            except Exception as e:
-                cons_print(f"Volume comparison: interactive show failed ({e}); using PNG fallback.")
+                bpy.ops.wm.path_open(filepath=tmp_png)
+                cons_print(f"Volume comparison: opened '{tmp_png}'.")
+
+            if matplotlib.get_backend().lower() in non_gui:
                 _open_as_png()
+            else:
+                try:
+                    plt.show(block=True)
+                    plt.close(fig)
+                except Exception as e:
+                    cons_print(f"Volume comparison: interactive show failed ({e}); using PNG fallback.")
+                    _open_as_png()
+        finally:
+            if scene.live_compare and scene.live_delete_temp and click_dir:
+                shutil.rmtree(click_dir, ignore_errors=True)
 
         return{'FINISHED'}
 
@@ -2497,6 +2540,12 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
     bl_label = 'plot STL files'
     
     def execute(self,context):
+        if context.scene.live_compare:
+            cons_print(
+                "Volume comparison: 'Save' is disabled in live mode. Use 'Show', or turn off "
+                "live mode to save a processed-geometries comparison."
+            )
+            return {'CANCELLED'}
         paths = resolve_volume_comparison_paths(context.scene)
         if paths is None:
             return {'CANCELLED'}
@@ -2539,8 +2588,8 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
 # Helpers for ventricle detection and STL export
 # -------------------------------------------------------------------
 
-# Look for names ending in "_<digits>", e.g. "..._0", "..._00", "..._123"
-VENTRICLE_SUFFIX_RE = re.compile(r"_(\d+)$")
+# Look for names ending in "_<digits>" or "_(<digits>)", e.g. "..._0", "..._00", "..._(000)"
+VENTRICLE_SUFFIX_RE = re.compile(r"_\(?(\d+)\)?$")
 
 def get_ventricle_index_from_name(name: str):
     """
@@ -2573,6 +2622,65 @@ def find_ventricle_objects(objs):
 
     items.sort(key=lambda x: x[0])
     return [o for (_, o) in items]
+
+def write_ventricle_connectivity(objects, connectivity_dir, triangulate=True, start_index=0):
+    """Write ventricle connectivity into an existing <connectivity_dir>:
+      - ventricle_faces.txt                     triangle indices from objects[0]
+      - ventricle_verts_<start_index + k>.txt   world coords per object k (8 decimals)
+
+    triangulate=True  -> triangulate a TEMPORARY bmesh copy of objects[0]. Triangulation
+                         adds no vertices, so vertex indices stay consistent across frames.
+    triangulate=False -> require objects[0] to be all triangles (validate-only, matching
+                         the original export/rotate behaviour).
+
+    Returns True on success, or False after a cons_print on the first failure. Never mutates
+    the input objects (bmesh copy via from_mesh; no to_mesh).
+    """
+    ref_obj = objects[0]
+    mesh = ref_obj.data
+
+    # --- Faces (from the reference object) ---
+    if triangulate:
+        bm = bmesh.new()
+        bm.from_mesh(mesh)                       # copy of the mesh data; ref_obj is untouched
+        bm.faces.ensure_lookup_table()
+        bmesh.ops.triangulate(bm, faces=bm.faces[:])
+        bm.verts.index_update()
+        faces = [tuple(v.index for v in f.verts) for f in bm.faces]
+        bm.free()
+    else:
+        faces = []
+        for poly in mesh.polygons:
+            if len(poly.vertices) != 3:
+                cons_print(
+                    f"Export ventricle: non-triangular face {poly.index} in "
+                    f"'{ref_obj.name}'. Please triangulate the mesh first."
+                )
+                return False
+            faces.append(tuple(poly.vertices))
+
+    faces_path = os.path.join(connectivity_dir, "ventricle_faces.txt")
+    try:
+        with open(faces_path, "w") as f:
+            for v0, v1, v2 in faces:
+                f.write(f"{v0} {v1} {v2}\n")
+    except Exception as e:
+        cons_print(f"Export ventricle: error writing faces file: {e}")
+        return False
+
+    # --- Per-object vertex coordinates (world space) ---
+    for k, obj in enumerate(objects):
+        verts_path = os.path.join(connectivity_dir, f"ventricle_verts_{start_index + k}.txt")
+        try:
+            with open(verts_path, "w") as f:
+                for v in obj.data.vertices:
+                    co_world = obj.matrix_world @ v.co
+                    f.write(f"{co_world.x:.8f} {co_world.y:.8f} {co_world.z:.8f}\n")
+        except Exception as e:
+            cons_print(f"Export ventricle: error writing vertices for '{obj.name}': {e}")
+            return False
+
+    return True
 
 from mathutils.bvhtree import BVHTree
 def export_object_to_stl(obj, filepath, depsgraph=None):
@@ -2708,6 +2816,9 @@ scene_properties = {
     # Export / CFD pipeline variables.
     "ventricle_export_dir": bpy.props.StringProperty(name="Export folder", description="Folder to export for ventricle connectivity/coordinates and STL export", subtype='DIR_PATH', default="//"),
     "plot_input_path": bpy.props.StringProperty(name="Processed geometries", description="Folder with the processed (reconstructed) geometries from this pipeline, to compare against the raw data. If empty, the Export folder is used", subtype="DIR_PATH", default="//"),
+    # Live volume-curve comparison (compare the current selection instead of an exported folder).
+    "live_compare": bpy.props.BoolProperty(name="Live comparison", description="Compare the currently selected, not-yet-exported ventricle objects directly against the raw data, instead of a processed-geometries folder", default=False),
+    "live_delete_temp": bpy.props.BoolProperty(name="Delete temp after showing", description="In live mode, delete the per-click temporary Connectivity folder after the plot is shown. If off, temp folders are kept for the session and cleared on Blender exit", default=False),
 }
 
 def register(): # Register classes from scene_properties.
