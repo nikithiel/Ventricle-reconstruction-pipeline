@@ -67,7 +67,7 @@ def deselect_object_vertices(obj):
     # Return to object mode and update the mesh to the obeject.
     bm.select_flush_mode()   
     me.update()
-    bpy.ops.object.mode_set(mode='OBJECT') 
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 def join_objects(obj, joined_obj):
     """Join two objects without changing the selection"""
@@ -392,9 +392,15 @@ def remove_multiple_basal_region(context):
         return False
     selected_objects = context.selected_objects
     # Find reference object and create a copy of it as a reference object. This is either the mean or max value between all selected objects.
-    if bpy.types.Scene.mean_reference: reference_copy = copy_object(find_reference_ventricle_mean(selected_objects), 'reference')  
-    else: reference_copy = copy_object(find_reference_ventricle_max(selected_objects), 'reference')
-    cons_print(f"Chosen reference object: {bpy.types.Scene.reference_object_name}")
+    if context.scene.mean_reference:
+        reference_name = find_reference_ventricle_mean(selected_objects)
+    else:
+        reference_name = find_reference_ventricle_max(selected_objects)
+
+    context.scene.reference_object_name = reference_name
+    reference_copy = copy_object(reference_name, 'reference')
+    cons_print(f"Chosen reference object: {context.scene.reference_object_name}")
+
     for obj in selected_objects: obj.select_set(False) # Deselect objects.
     # Basal region removal. First for reference, then remaining objects.
     deleted_verts = remove_basal_region(context, reference_copy, []) # Remove in reference object
@@ -427,6 +433,7 @@ def remove_basal_region(context, obj, del_nodes):
         for v in bm.verts:
             if v.index in del_nodes: v.select = True
     bm.to_mesh(obj.data) # Update selection to object.
+    bm.free()
     ## Remove selected nodes.
     bpy.ops.object.mode_set(mode='EDIT') 
     bpy.ops.mesh.delete_edgeloop()
@@ -434,6 +441,7 @@ def remove_basal_region(context, obj, del_nodes):
     # Save upper apical edge loop in a vertex group to be selected again later on.
     bm = transfer_data_to_mesh(obj)
     marked_verts = [v.index for v in bm.verts if v.select]
+    bm.free()
     vg_upper_apical = "upper_apical_edge_loop"
     vg_orifice = obj.vertex_groups.new(name = vg_upper_apical)
     vg_orifice.add(marked_verts, 1, 'ADD' )
@@ -486,6 +494,7 @@ def subdivide_last_edge_loop(obj, vg_orifice):
     bpy.ops.object.mode_set(mode='OBJECT')
     bm = transfer_data_to_mesh(obj)
     selected_verts = [v.index for v in bm.verts if v.select] # Re-read selected vertices.
+    bm.free()
     vg_name = vg_orifice.name
     if vg_orifice is not None: obj.vertex_groups.remove(vg_orifice) # Delete previous vertex group to make room for new one.
     vg_orifice = obj.vertex_groups.new(name = vg_name)
@@ -728,6 +737,7 @@ def create_valve_orifice(context, valve_mode):
     faces = [f for f in bm.faces if f.select]
     bmesh.ops.delete(bm, geom = faces, context = 'FACES_ONLY')
     bm.to_mesh(obj.data)
+    bm.free()
     # Create vertex group containing orifice edge loop vertices.
     vg_orifice = obj.vertex_groups.new( name = f"{valve_mode}_orifice")
     vg_orifice.add( vertices_orifice, 1, 'ADD')
@@ -861,7 +871,7 @@ def select_vertices_outside_of_edge_loop(obj):
     bpy.ops.object.vertex_group_set_active(group="lower_basal_edge_loop")
     bpy.ops.object.vertex_group_deselect()
     # Return to object mode and update the mesh to the obeject.
-    bm.select_flush_mode()   
+    bm.select_flush_mode()
     me.update()
     bpy.ops.object.mode_set(mode='OBJECT') 
     return must_remove
@@ -920,7 +930,8 @@ class MESH_OT_create_basal(bpy.types.Operator):
 
 """def mesh_create_basal(context, selected_objects):
     if len(selected_objects) == 1:
-        bpy.types.Scene.reference_object_name = selected_objects[0].name
+        #bpy.types.Scene.reference_object_name = selected_objects[0].name
+        context.scene.reference_object_name = selected_objects[0].name
     else:
         cons_print(f"Currently does not work :(")
         return False
@@ -954,7 +965,7 @@ def mesh_create_basal(context):
         return False
     selected_objects = context.selected_objects
     # Find object with mean volume and create a copy of it as a reference object to create the reference basal region from.
-    reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
+    reference_copy = copy_object(context.scene.reference_object_name, 'basal_region')
     # Deselect objects.
     for obj in selected_objects: obj.select_set(False)
     # Operations to create basal region of the ventricle.
@@ -974,30 +985,36 @@ def mesh_create_basal(context):
     bpy.data.objects.remove(bpy.data.objects["basal_region_poisson"], do_unlink=True)
     return basal_regions
 
+
 def find_reference_ventricle_max(objects): 
-    """Find reference object with max volume and return its name"""
-    max = 0
+    """Find reference object with the largest volume and return its name"""
+    max_volume = -float('inf')
+    reference_name = ""
     for obj in objects:  
         bm = transfer_data_to_mesh(obj)
-        volume = bm.calc_volume(signed=True)# Compute volume and append it to the volume list.
-        if volume > max: # Find ventricle with maximum volume.
-            max = volume
-            bpy.types.Scene.reference_object_name = obj.name
-    return bpy.types.Scene.reference_object_name
+        volume = abs(bm.calc_volume(signed=True))  # abs() -> robust gegen invertierte Normalen.
+        bm.free()
+        if volume > max_volume:
+            max_volume = volume
+            reference_name = obj.name
+    return reference_name
+
 
 def find_reference_ventricle_mean(objects): 
-    """Find reference object with max volume and return its name"""
+    """Find reference object with mean volume and return its name"""
     volumes = []
     for obj in objects: 
         bm = transfer_data_to_mesh(obj)
         volumes.append(bm.calc_volume(signed=True))
+        bm.free()
     mean_volume = sum(volumes) / len(volumes)
     diff_to_mean = 2 * max(volumes)
+    reference_name = ""
     for counter, obj in enumerate(objects):  
         if abs(volumes[counter] - mean_volume) < diff_to_mean: 
             diff_to_mean = abs(volumes[counter] - mean_volume)
-            bpy.types.Scene.reference_object_name = obj.name
-    return bpy.types.Scene.reference_object_name
+            reference_name = obj.name
+    return reference_name
 
 def create_basal_region_for_object(context, reference_copy):
     """Create basal part for a given ventricle"""
@@ -1067,7 +1084,8 @@ def remove_apical_region(context, obj):
         vertice_coords = obj.matrix_world @ v.co # Transfer to global coordinates.
         if vertice_coords[2] < context.scene.height_plane: v.select = True # Only vertices below threshold (height-plane) shall be deleted.
         else:  v.select = False
-    bm.to_mesh(obj.data) # Transfer selection to object. 
+    bm.to_mesh(obj.data) # Transfer selection to object.
+    bm.free()
     # Remove selected vertices.
     bpy.ops.object.mode_set(mode='EDIT') 
     bpy.ops.mesh.delete_edgeloop()
@@ -1075,6 +1093,7 @@ def remove_apical_region(context, obj):
     # Save bottom edge loop to be selected again later on.
     bm = transfer_data_to_mesh(obj)
     marked_verts = [v.index for v in bm.verts if v.select] # Saved selected vertices.
+    bm.free()
     # Create vertex group for lower basal edge loop and add selected vertices to it.
     vg_lower_basal = "lower_basal_edge_loop"
     vg_orifice = obj.vertex_groups.new( name = vg_lower_basal)
@@ -1245,7 +1264,7 @@ def mesh_connect_apical_and_basal(context):
             curr_basal.select_set(False)
             curr_basal.hide_set(True)
     # Create initial connection using a reference copy.
-    reference = copy_object(bpy.types.Scene.reference_object_name, "reference")
+    reference = copy_object(context.scene.reference_object_name, "reference")
     if not combine_apical_and_basal_region(context, basal_regions, reference, selected_objects): return False
     cleanup_basal_region(context) # Cleanup: Delete basal regions.
     return True
@@ -1362,7 +1381,7 @@ def bridge_edges_ventricle(obj, new_edges_vert_indices):
     bpy.ops.object.mode_set(mode='OBJECT') # Necessary switch between object and edit mode to update blender-object.
     bpy.ops.object.mode_set(mode='EDIT') 
     bpy.ops.mesh.edge_face_add() # Create faces between connection edges.
-    bpy.ops.object.mode_set(mode='OBJECT') 
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 def inset_faces_smooth(context):
     """Create new vertices along the connection between apical and basal region. This subdivision aims to more equally space the height and width of these faces"""
@@ -1403,19 +1422,24 @@ def triangulate_connection(bool_ref, obj, ref_edge_indices):
         bpy.ops.object.mode_set(mode='OBJECT') # Change to object mode.
     return edges_vert_indices_tri
 
+
 def compute_smoothing_iteration_factor_connection(context, counter, volumelist):
-    """Compute how strongly the connection between basal and apical region will be smoothed."""
-    max_index = volumelist.index(max(volumelist)) # Index of EDV in volume list.
-    min_index = volumelist.index(min(volumelist)) # Index of ESV in volume list.
-    if counter >= min_index and counter <= max_index:
-        smoothing_iter_factor = 1  - (counter - min_index) * 1 / (max_index - min_index)
-    elif counter > max_index:
-        smoothing_iter_factor = 1  * (counter - max_index) / (len(volumelist)- max_index)
-    else: 
-        cons_print(f"Mistake in computation of smoothing iteration factor for the smoothing of the basal-apical connection.")
-        smoothing_iter_factor = 1
-    smoothing_iter_factor = smoothing_iter_factor * 2 # Increase smoothing iteration factor by factor 2.
-    if context.scene.approach == 5: smoothing_iter_factor = smoothing_iter_factor * 2 # Further increase it for approach 5 as it has a higher vertex density in the basal region.
+    """Compute how strongly the connection between basal and apical region is smoothed.
+
+    The factor is coupled to the ventricle volume: 1 at the smallest volume
+    (ESV, mesh most contracted -> highest vertex density -> needs strong smoothing)
+    and 0 at the largest volume (EDV). Works regardless of the ordering of the
+    volume list, so the geometries no longer need to be sorted.
+    """
+    v_min = min(volumelist)  # ESV
+    v_max = max(volumelist)  # EDV
+    if v_max == v_min:  # All volumes equal -> avoid division by zero.
+        smoothing_iter_factor = 1.0
+    else:
+        smoothing_iter_factor = 1 - (volumelist[counter] - v_min) / (v_max - v_min)
+    smoothing_iter_factor *= 2  # Base scaling of the smoothing intensity.
+    if context.scene.approach == 5:  # Higher vertex density in the basal region.
+        smoothing_iter_factor *= 2
     return smoothing_iter_factor
 
 def smooth_connection_and_basal_region(context, obj, smoothing_iter_factor): 
@@ -1427,6 +1451,7 @@ def smooth_connection_and_basal_region(context, obj, smoothing_iter_factor):
         vertex_coords = obj.matrix_world @ v.co 
         if vertex_coords[2] >= context.scene.remove_basal_threshold: v.select = True 
     bm.to_mesh(obj.data)
+    bm.free()
     bpy.ops.object.mode_set(mode='EDIT') 
     # Select all nodes inside the connection.
     bpy.ops.object.vertex_group_set_active(group=str("lower_basal_edge_loop"))
@@ -1442,7 +1467,7 @@ def smooth_connection_and_basal_region(context, obj, smoothing_iter_factor):
         bpy.ops.object.vertex_group_set_active(group=str("MV"))
         bpy.ops.object.vertex_group_deselect()
         if i == 0:
-            smooth_iter = round(context.scene.max_con_sm_iter * smoothing_iter_factor) + context.scene.min_con_sm_iter # Strong smoothing initially.
+            smooth_iter = max(1, round(context.scene.max_con_sm_iter * smoothing_iter_factor) + context.scene.min_con_sm_iter) # Strong smoothing initially.
         else:
             smooth_iter = round(context.scene.max_con_sm_iter / 5 * smoothing_iter_factor * (context.scene.sm_reps-i)) + context.scene.min_con_sm_iter # Weaker smoothing after first iteration. As hard smoothing creates kinks between smoothed nodes and unsmoothed nodes.
         bpy.ops.mesh.vertices_smooth(factor=0.5, repeat=smooth_iter)
@@ -1642,6 +1667,7 @@ def compute_volume_area(obj):
     # Compute volume and surface area.
     volume = bm.calc_volume(signed=True) 
     area = sum(f.calc_area() for f in bm.faces)
+    bm.free()
     return volume, area
 
 class MESH_DEV_indices(bpy.types.Operator):
@@ -1719,7 +1745,7 @@ def check_node_connectivity(context):
                 cons_print(f"Found a vertex with only 2 neighbour vertices in object {obj.name} with vertex index {v.index} at position {obj.matrix_world @ v.co}")
                 v.select = True
                 return False
-        # Return to object mode and update the mesh to the obeject.
+        # Return to object mode and update the mesh to the object.
         bm.select_flush_mode()   
         me.update()
         bpy.ops.object.mode_set(mode='OBJECT') 
@@ -2574,80 +2600,71 @@ classes = [
 ]
 
 dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_object_transform, MESH_OT_calculate_valve_diameter]
-  
-def register():
+
+# Add new properties to the dict. register() and unregister() does not need to be changed. They will automatically register/unregister all properties in the dict.
+scene_properties = {
     # Position variables.
-    bpy.types.Scene.pos_top = bpy.props.FloatVectorProperty(name="Top position", default = (0,0,1))
-    bpy.types.Scene.pos_bot = bpy.props.FloatVectorProperty(name="Top position", default = (0,0,0))
-    bpy.types.Scene.pos_septum = bpy.props.FloatVectorProperty(name="Top position", default = (0,1,0))
+    "pos_top": bpy.props.FloatVectorProperty(name="Top position", default=(0, 0, 1)),
+    "pos_bot": bpy.props.FloatVectorProperty(name="Bottom position", default=(0, 0, 0)),
+    "pos_septum": bpy.props.FloatVectorProperty(name="Septum position", default=(0, 1, 0)),
     # Mitral valve.
-    bpy.types.Scene.mitral_radius_long = bpy.props.FloatProperty(name="mitral_radius_long", default=6,  min = 0.01)
-    bpy.types.Scene.mitral_radius_small = bpy.props.FloatProperty(name="mitral_radius_small", default=3,  min = 0.01)
-    bpy.types.Scene.translation_mitral = bpy.props.FloatVectorProperty(name="Aortic valve translation", default = (0,0,1))
-    bpy.types.Scene.angle_mitral = bpy.props.FloatVectorProperty(name="Aortic valve rotation", default = (0,0,0))
+    "mitral_radius_long": bpy.props.FloatProperty(name="mitral_radius_long", default=6, min=0.01),
+    "mitral_radius_small": bpy.props.FloatProperty(name="mitral_radius_small", default=3, min=0.01),
+    "translation_mitral": bpy.props.FloatVectorProperty(name="Mitral valve translation", default=(0, 0, 1)),
+    "angle_mitral": bpy.props.FloatVectorProperty(name="Mitral valve rotation", default=(0, 0, 0)),
     # Aortic valve.
-    bpy.types.Scene.aortic_radius = bpy.props.FloatProperty(name="aortic_radius", default=2,  min = 0.01)
-    bpy.types.Scene.translation_aortic = bpy.props.FloatVectorProperty(name="Aortic valve translation", default = (0,0,1))
-    bpy.types.Scene.angle_aortic = bpy.props.FloatVectorProperty(name="Aortic valve rotation", default = (0,0,0))
+    "aortic_radius": bpy.props.FloatProperty(name="aortic_radius", default=2, min=0.01),
+    "translation_aortic": bpy.props.FloatVectorProperty(name="Aortic valve translation", default=(0, 0, 1)),
+    "angle_aortic": bpy.props.FloatVectorProperty(name="Aortic valve rotation", default=(0, 0, 0)),
     # Support structure.
-    bpy.types.Scene.ref_minima = bpy.props.FloatVectorProperty(name="Minima of reference object", default = (0,0,0))
-    bpy.types.Scene.ref_maxima = bpy.props.FloatVectorProperty(name="Maxima of reference object", default = (0,0,1))
+    "ref_minima": bpy.props.FloatVectorProperty(name="Minima of reference object", default=(0, 0, 0)),
+    "ref_maxima": bpy.props.FloatVectorProperty(name="Maxima of reference object", default=(0, 0, 1)),
     # Cutting plane variables.
-    bpy.types.Scene.remove_basal_threshold = bpy.props.FloatProperty(name="Threshold for the removal of the basal region", default=28.5,  min = 0)
-    bpy.types.Scene.height_plane = bpy.props.FloatProperty(name="Cut-off value for the creation of the reference basal region", default=40,  min = 0.01)
-    bpy.types.Scene.min_valves = bpy.props.FloatProperty(name="Minimal z-value of valves", default=45)
+    "remove_basal_threshold": bpy.props.FloatProperty(name="Threshold for the removal of the basal region", default=28.5, min=0),
+    "height_plane": bpy.props.FloatProperty(name="Cut-off value for the creation of the reference basal region", default=40, min=0.01),
+    "min_valves": bpy.props.FloatProperty(name="Minimal z-value of valves", default=45),
     # Approach selection.
-    bpy.types.Scene.approach = bpy.props.IntProperty(name="Chosen modeling approach", default=3, min = 3, max = 5)
-    bpy.types.Scene.mean_reference = bpy.props.BoolProperty(name="Mean volume as reference", default=True)
-    # Possion algorithm.
-    bpy.types.Scene.poisson_depth = bpy.props.IntProperty(name="Depth of possion algorithm", default=10,  min = 1)
+    "approach": bpy.props.IntProperty(name="Chosen modeling approach", default=3, min=3, max=5),
+    "mean_reference": bpy.props.BoolProperty(name="Mean volume as reference", default=True),
+    # Poisson algorithm.
+    "poisson_depth": bpy.props.IntProperty(name="Depth of poisson algorithm", default=10, min=1),
     # Interpolation variables.
-    bpy.types.Scene.time_rr = bpy.props.FloatProperty(name="Time RR-duration", default=0.6,  min = 0.01)
-    bpy.types.Scene.time_diastole = bpy.props.FloatProperty(name="Time diastole", default=0.35,  min = 0.01) 
-    bpy.types.Scene.frames_ventricle = bpy.props.IntProperty(name="Amount of frames ventricle after interpolation", default=10,  min = 10)
+    "time_rr": bpy.props.FloatProperty(name="Time RR-duration", default=0.6, min=0.01),
+    "time_diastole": bpy.props.FloatProperty(name="Time diastole", default=0.35, min=0.01),
+    "frames_ventricle": bpy.props.IntProperty(name="Amount of frames ventricle after interpolation", default=10, min=10),
     # Connection algorithm variables.
-    bpy.types.Scene.reference_object_name = bpy.props.StringProperty(name="Name of the reference object", default = "ventricle_0")
-    bpy.types.Scene.inset_faces_refinement_steps = bpy.props.IntProperty(name="Refinement steps when insetting faces in the connection algorithm", default=1, min=1)
-    bpy.types.Scene.connection_twist = bpy.props.IntProperty(name="Twist for bridging algorithm in connection", default=0)
-    bpy.types.Scene.max_con_sm_iter = bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min = 5)
-    bpy.types.Scene.min_con_sm_iter = bpy.props.IntProperty(name="Minimum smoothing iterations for the smoothing of the connection between basal and apical region", default=2, min = 0)
-    bpy.types.Scene.sm_reps = bpy.props.IntProperty(name="Repitions of reselection and smoothing application when smoothing basal and apical region", default=3, min = 0)
-
+    "reference_object_name": bpy.props.StringProperty(name="Name of the reference object", default="ventricle_0"),
+    "inset_faces_refinement_steps": bpy.props.IntProperty(name="Refinement steps when insetting faces in the connection algorithm", default=1, min=1),
+    "connection_twist": bpy.props.IntProperty(name="Twist for bridging algorithm in connection", default=0),
+    "max_con_sm_iter": bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min=5),
+    "min_con_sm_iter": bpy.props.IntProperty(name="Minimum smoothing iterations for the smoothing of the connection between basal and apical region", default=2, min=0),
+    "sm_reps": bpy.props.IntProperty(name="Repitions of reselection and smoothing application when smoothing basal and apical region", default=3, min=0),
     # Import variables.
-    bpy.types.Scene.ventricle_import_dir = bpy.props.StringProperty(
-        name="Import folder",
-        description="Folder to import the ventricle STL dataset",
-        subtype='DIR_PATH',
-        default="//",
-    )
-
+    "ventricle_import_dir": bpy.props.StringProperty(name="Import folder", description="Folder to import the ventricle STL dataset", subtype='DIR_PATH', default="//"),
     # Export / CFD pipeline variables.
-    bpy.types.Scene.ventricle_export_dir = bpy.props.StringProperty(
-        name="Export folder",
-        description="Folder to export for ventricle connectivity/coordinates and STL export",
-        subtype='DIR_PATH',
-        default="//",
-    )
-    
-    bpy.types.Scene.plot_input_path = bpy.props.StringProperty(
-        name = "Input directory for plotting",
-        description="Directory for plotting input",
-        subtype="DIR_PATH",
-        default="//",
-    )
-    
-    # Register UI-classes for Panels and functions.
-    for c in classes: bpy.utils.register_class(c)
-    # Register Development UI-classes.
-    if dev_env_tools: 
-        for c in dev_classes: bpy.utils.register_class(c)
+    "ventricle_export_dir": bpy.props.StringProperty(name="Export folder", description="Folder to export for ventricle connectivity/coordinates and STL export", subtype='DIR_PATH', default="//"),
+    "plot_input_path": bpy.props.StringProperty(name="Input directory for plotting", description="Directory for plotting input", subtype="DIR_PATH", default="//"),
+}
+
+def register(): # Register classes from scene_properties.
+    for name, prop in scene_properties.items():
+        setattr(bpy.types.Scene, name, prop)
+    for c in classes:
+        bpy.utils.register_class(c)
+    if dev_env_tools:
+        for c in dev_classes:
+            bpy.utils.register_class(c)
 
     
 def unregister(): # Unregister classes.
-    for c in classes: bpy.utils.unregister_class(c)
+    for c in classes:
+        bpy.utils.unregister_class(c)
     if dev_env_tools:
-        for c in dev_classes: bpy.utils.unregister_class(c)
+        for c in dev_classes:
+            bpy.utils.unregister_class(c)
+    for name in scene_properties:
+        delattr(bpy.types.Scene, name)
 
-        
+
 if __name__ == '__main__': 
     register() 
