@@ -21,6 +21,10 @@ import os
 import re
 import shutil
 import uuid
+import sys
+import subprocess
+import importlib.util
+import time
 
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -38,6 +42,12 @@ scene = bpy.types.Scene
 dev_env_tools = True
 
 # Generally used functions.
+def _cons_rule(title):
+    """Console separator so each button press forms one visually grouped block."""
+    cons_print("")
+    cons_print(f"===== {title} =====")
+
+
 def cons_print(data):
     """Print to console for button presses. Used for error messages, information outputs and warnings"""
     for window in bpy.context.window_manager.windows:
@@ -2344,6 +2354,19 @@ def resolve_raw_and_settings_paths(scene):
         )
         return None
 
+    # Raw-side connectivity pre-check: derive validates <rotated>/Connectivity at runtime and
+    # raises. In the subprocess path that raise is only visible in the log, so surface it here.
+    (_, _, sFrameID, eFrameID, _, _, _) = parseRunTimeVariables_unique(inputsetting)
+    base_conn_errors = _connectivity_errors(
+        os.path.join(rotated_dir, "Connectivity"), sFrameID, eFrameID)
+    if base_conn_errors:
+        cons_print(
+            "Volume comparison: connectivity check of the raw 'rotated' folder failed:\n"
+            + "\n".join("- " + e for e in base_conn_errors)
+            + "\nRun 'Translate and rotate' first."
+        )
+        return None
+
     return {
         "inputsetting": inputsetting,
         "rotated_dir": rotated_dir,
@@ -2396,6 +2419,90 @@ def resolve_volume_comparison_paths(scene):
         "interpolMethod": interpolMethod,
     }
 
+def _qt_available():
+    """True if a Qt binding matplotlib can use is importable. Checked WITHOUT importing it,
+    so Blender's own process never loads Qt (that would reintroduce the freeze risk)."""
+    for m in ("PyQt5", "PySide2", "PySide6", "PyQt6"):
+        try:
+            if importlib.util.find_spec(m) is not None:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _plot_python_exe():
+    """Pick a Python that actually has matplotlib/numpy/scipy (and ideally PyQt5). This
+    addon is normally run from a project venv exposed to Blender via PYTHONPATH, so PREFER
+    that venv's interpreter (its packages live there). Fall back to Blender's bundled
+    python.exe only if no venv is found.
+
+    Detection order:
+      1) an activated venv        -> VIRTUAL_ENV (set by the venv 'activate' script)
+      2) a venv next to the project -> <project>/.venv-blender (even if not activated)
+      3) Blender's bundled python
+    """
+    bases = []
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv:
+        bases.append(venv)
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # <project>/addons/..
+    for name in (".venv-blender", ".venv", "venv"):
+        bases.append(os.path.join(project_dir, name))
+    for base in bases:
+        for cand in (os.path.join(base, "Scripts", "python.exe"),  # Windows
+                     os.path.join(base, "bin", "python")):          # POSIX
+            if os.path.isfile(cand):
+                return cand
+    return os.path.join(sys.exec_prefix, "bin", "python.exe")  # Blender's bundled python
+
+
+def _launch_plot_subprocess(input_path, plot_input_dir, base_dir, interp_method,
+                            save_csv=False, save_png="", delete_dir=""):
+    """Spawn the detached Qt plot process (Blender's bundled python + the standalone
+    _volume_compare_subprocess.py) so Blender's main thread never runs the Qt event loop.
+    Returns the child's log-file path (str) if launched, else None (caller falls back to an
+    in-Blender PNG). On success the CHILD owns derive + save + show and deleting `delete_dir`."""
+    exe = _plot_python_exe()
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "_volume_compare_subprocess.py")
+    if not (os.path.isfile(exe) and os.path.isfile(runner)):
+        return None
+
+    argv = [exe, runner,
+            "--input-path", input_path,
+            "--plot-input-dir", plot_input_dir,
+            "--base-dir", base_dir or "",
+            "--temp-root", bpy.app.tempdir]
+    if interp_method is not None:
+        argv += ["--interp-method", str(int(interp_method))]
+    if save_csv:
+        argv += ["--save-csv"]
+    if save_png:
+        argv += ["--save-png", save_png]
+    if delete_dir:
+        argv += ["--delete-dir", delete_dir]
+
+    # Inherit Blender's FULL environment: this addon is normally run with a project venv
+    # exposed via PYTHONPATH (blender --python-use-system-env), and the plot process must
+    # see those packages the same way Blender does. Do NOT strip PYTHONPATH/PYTHONHOME here.
+    log_path = os.path.join(bpy.app.tempdir,
+                            f"volume_plot_{os.getpid()}_{int(time.time() * 1000)}.log")
+    try:
+        log = open(log_path, "w")
+        try:
+            subprocess.Popen(argv, stdout=log, stderr=log,
+                             cwd=os.path.dirname(runner),
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        finally:
+            log.close()  # the child keeps its own inherited handle
+    except Exception as e:
+        cons_print(f"Could not launch plot process ({e}); using PNG fallback.")
+        return None
+
+    return log_path
+
+
 class MESH_OT_plot_STL(bpy.types.Operator):
     """Display the plot"""
     bl_idname = 'heart.plot_stl'
@@ -2404,6 +2511,7 @@ class MESH_OT_plot_STL(bpy.types.Operator):
     def execute(self,context):
         scene = context.scene
         click_dir = None
+        _cons_rule("Volume comparison — live" if scene.live_compare else "Volume comparison")
         if scene.live_compare:
             # Live mode: build a throwaway Connectivity folder from the current selection
             # (not yet exported) and feed that to the same file-based comparison path.
@@ -2428,8 +2536,8 @@ class MESH_OT_plot_STL(bpy.types.Operator):
                 objs = find_ventricle_objects(scene.collection.objects)
                 if objs:
                     cons_print(
-                        f"Live comparison: no complete set selected; using all {len(objs)} "
-                        f"top-level ventricle_* object(s) in the scene."
+                        f"Objects: using all {len(objs)} top-level ventricle_* "
+                        f"(no complete frame set selected)."
                     )
             if not objs:
                 cons_print(
@@ -2482,57 +2590,51 @@ class MESH_OT_plot_STL(bpy.types.Operator):
             interpolMethod = paths["interpolMethod"]
             save_flag = False
 
-        try:
-            # A figure's canvas is bound to the backend active when it is created, and
-            # calculate_valve_diameters forces 'Agg' at import. So try to activate an
-            # interactive Qt backend BEFORE building the figure. If no Qt binding is
-            # available this stays on Agg and we fall back to a temp PNG opened with the
-            # OS default viewer, so 'Show' works on every machine.
-            non_gui = {"agg", "cairo", "pdf", "pgf", "ps", "svg", "template"}
-            if matplotlib.get_backend().lower() in non_gui:
-                try:
-                    plt.switch_backend("QtAgg")
-                except Exception as e:
-                    cons_print(f"Volume comparison: no interactive backend ({e}); using PNG fallback.")
+        # Live outputs (kept next to the temp connectivity) + optional cleanup ownership.
+        save_png = (os.path.join(click_dir, "volume_comparison", "volume_curve_comparison.png")
+                    if scene.live_compare else "")
+        delete_dir = click_dir if (scene.live_compare and scene.live_delete_temp) else ""
 
-            _,_,_, fig = derive_ed_es_from_volume_curve(
+        # Interactive display runs in a SEPARATE process so Blender's main thread never runs
+        # the Qt event loop (which froze the UI until the plot window was closed). The child
+        # re-derives, (optionally) saves, shows the window and owns deleting `delete_dir`.
+        log_path = None
+        if _qt_available():
+            log_path = _launch_plot_subprocess(
+                inputsetting, plot_input_dir, rotated_dir, interpolMethod,
+                save_flag, save_png, delete_dir)
+        if log_path:
+            cons_print("Plot: interactive window (separate process — Blender stays responsive; "
+                       "may open behind Blender, Alt-Tab to it).")
+            if scene.live_compare:
+                note = ("deleted when you close the plot window" if delete_dir
+                        else "kept until Blender exits")
+                cons_print(f"Output: {click_dir}  ({note})")
+            cons_print(f"Log: {log_path}")
+            return {'FINISHED'}  # child owns derive / save / show / cleanup
+
+        # Fallback: no Qt binding (or launch failed) -> build on Agg here and open a temp PNG
+        # with the OS default viewer. path_open returns immediately, so this is non-blocking.
+        try:
+            _, _, _, fig = derive_ed_es_from_volume_curve(
                 inputsetting, plot_input_dir, rotated_dir,
                 interpolMethod, "volume", save_flag)
-
             if scene.live_compare:
-                # Save the plot next to the CSVs derive just wrote, mirroring the 'Save'
-                # button but into the throwaway temp folder.
                 fig.savefig(os.path.join(click_dir, "volume_comparison", "volume_curve_comparison.png"))
-                if scene.live_delete_temp:
-                    if matplotlib.get_backend().lower() in non_gui:
-                        note = "deleted after the plot image is opened"
-                    else:
-                        note = "deleted after the interactive plot is closed"
-                    cons_print(f"Live comparison: output (Connectivity + volume_comparison) in '{click_dir}' ({note}).")
-                else:
-                    cons_print(f"Live comparison: output (Connectivity + volume_comparison) kept in '{click_dir}' (removed when Blender exits).")
-
-            def _open_as_png():
-                tmp_png = os.path.join(bpy.app.tempdir, "volume_curve_comparison.png")
-                fig.savefig(tmp_png)
-                plt.close(fig)
-                bpy.ops.wm.path_open(filepath=tmp_png)
-                cons_print(f"Volume comparison: opened '{tmp_png}'.")
-
-            if matplotlib.get_backend().lower() in non_gui:
-                _open_as_png()
-            else:
-                try:
-                    plt.show(block=True)
-                    plt.close(fig)
-                except Exception as e:
-                    cons_print(f"Volume comparison: interactive show failed ({e}); using PNG fallback.")
-                    _open_as_png()
+            tmp_png = os.path.join(bpy.app.tempdir, "volume_curve_comparison.png")
+            fig.savefig(tmp_png)
+            plt.close(fig)
+            bpy.ops.wm.path_open(filepath=tmp_png)
+            cons_print(f"Plot: opened as a PNG image ({tmp_png}).")
+            if scene.live_compare:
+                note = ("removed now the image is open" if delete_dir
+                        else "kept until Blender exits")
+                cons_print(f"Output: {click_dir}  ({note})")
         finally:
-            if scene.live_compare and scene.live_delete_temp and click_dir:
-                shutil.rmtree(click_dir, ignore_errors=True)
+            if delete_dir:
+                shutil.rmtree(delete_dir, ignore_errors=True)
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 class MESH_OT_save_plot_STL(bpy.types.Operator):
     """Save the plot without displaying and also any additional files within the input folder"""
@@ -2540,10 +2642,11 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
     bl_label = 'plot STL files'
     
     def execute(self,context):
+        _cons_rule("Volume comparison — save")
         if context.scene.live_compare:
             cons_print(
-                "Volume comparison: 'Save' is disabled in live mode. Use 'Show', or turn off "
-                "live mode to save a processed-geometries comparison."
+                "'Save' is disabled in live mode. Use 'Show', or turn off live mode "
+                "to save a processed-geometries comparison."
             )
             return {'CANCELLED'}
         paths = resolve_volume_comparison_paths(context.scene)
@@ -2559,7 +2662,7 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
 
         plot_path = os.path.join(out_dir, "volume_curve_comparison.png")
         fig.savefig(plot_path)
-        cons_print(f"Volume comparison: saved to '{out_dir}'")
+        cons_print(f"Saved to: {out_dir}")
 
         return{'FINISHED'}
 

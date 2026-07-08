@@ -197,7 +197,7 @@ Volumes are computed from the mesh **connectivity** (`Connectivity/*.txt`), not 
 - **Processed geometries** (in this panel) — the folder holding the reconstructed geometries to compare. **If it is left empty, the *Export folder* is used instead.**
 
 **Running it**
-- **Show** — displays the plot. If an interactive matplotlib backend is available (a Qt binding such as *PyQt5* installed in Blender's Python), an interactive window opens; otherwise the plot is written to a temporary PNG and opened with your operating system's default image viewer.
+- **Show** — displays the plot. If an interactive matplotlib backend is available (a Qt binding such as *PyQt5* installed in Blender's Python), the plot opens in an interactive window **in a separate process, so Blender stays responsive** (the window may appear behind Blender — Alt-Tab to it). Otherwise the plot is written to a temporary PNG and opened with your operating system's default image viewer.
 - **Save** — writes the plot and the underlying data to disk (see *Outputs*).
 
 **Outputs** — **Save** writes into `<Processed geometries>/volume_comparison/`:
@@ -210,7 +210,7 @@ Tick **Live comparison** to compare the ventricles **currently in your scene** a
 - **Objects used:** if a complete frame set (`ventricle_0 … ventricle_N-1`) is selected, that selection is used; otherwise all top-level `ventricle_*` meshes in the scene are taken automatically. A wrong count or a mismatched topology between frames is reported to the System Console and nothing is plotted.
 - **Processed geometries** and **Save** are disabled in this mode — use **Show**.
 - **Outputs** go to a fresh folder under Blender's temp directory (`gvr_live_compare_<id>/`), holding `Connectivity/` and the same `volume_comparison/` PNG + CSVs that *Save* produces. The exact path is printed to the System Console.
-- **Delete temp after showing:** when ticked, that temp folder is removed after you close the interactive plot (or after the PNG image opens); when unticked it is kept until Blender exits.
+- **Delete temp after showing:** when ticked, that temp folder is removed as soon as the plot has been prepared (the plot window itself is unaffected); when unticked it is kept until Blender exits.
 
 If a required input is missing (no `rotated/`, no `inputPython.txt`, or no valid *Processed geometries* folder), a clear warning is printed to the Blender **System Console** (`Window → Toggle System Console`) and nothing is plotted.
 
