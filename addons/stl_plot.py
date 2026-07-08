@@ -82,6 +82,24 @@ def parseRunTimeVariables_unique(inputpath):
         runtimeTree["interMethod"],
     )
 
+def _connectivity_errors(conn_dir, start_frame_id, end_frame_id):
+    """Return list of error strings for missing connectivity files (empty if all present)."""
+    errors = []
+    if not os.path.isdir(conn_dir):
+        errors.append("Connectivity directory '{}' does not exist.".format(conn_dir))
+        return errors
+    faces_path = os.path.join(conn_dir, 'ventricle_faces.txt')
+    if not os.path.isfile(faces_path):
+        errors.append("Missing connectivity file: {}".format(faces_path))
+    missing_verts = []
+    for fid in range(start_frame_id, end_frame_id + 1):
+        vpath = os.path.join(conn_dir, 'ventricle_verts_{}.txt'.format(fid))
+        if not os.path.isfile(vpath):
+            missing_verts.append(vpath)
+    if missing_verts:
+        errors.append("Missing ventricle_verts_*.txt connectivity files:\n  " + "\n  ".join(missing_verts))
+    return errors
+
 def check_stl_and_connectivity(inputPath, num_frames, start_frame_id, end_frame_id):
     """
     Pre-check that all necessary STL and connectivity files exist.
@@ -127,23 +145,7 @@ def check_stl_and_connectivity(inputPath, num_frames, start_frame_id, end_frame_
 
         # 3) Connectivity
         conn_dir = os.path.join(stl_dir, 'Connectivity')
-        if not os.path.isdir(conn_dir):
-            errors.append("Connectivity directory '{}' does not exist.".format(conn_dir))
-        else:
-            faces_path = os.path.join(conn_dir, 'ventricle_faces.txt')
-            if not os.path.isfile(faces_path):
-                errors.append("Missing connectivity file: {}".format(faces_path))
-
-            missing_verts = []
-            for fid in range(start_frame_id, end_frame_id + 1):
-                vpath = os.path.join(conn_dir, 'ventricle_verts_{}.txt'.format(fid))
-                if not os.path.isfile(vpath):
-                    missing_verts.append(vpath)
-            if missing_verts:
-                errors.append(
-                    "Missing ventricle_verts_*.txt connectivity files:\n  " +
-                    "\n  ".join(missing_verts)
-                )
+        errors.extend(_connectivity_errors(conn_dir, start_frame_id, end_frame_id))
 
     if errors:
         msg = "\n".join("- " + e for e in errors)
@@ -428,7 +430,7 @@ def _mesh_volume_mm3(verts, faces):
     vol = np.sum(np.einsum("ij,ij->i", v0, np.cross(v1, v2))) / 6.0
     return float(abs(vol))
 
-def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_dirbase="", inter_method=None, out_prefix="volume", save_csv="False"):
+def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_dirbase="", inter_method=None, out_prefix="volume", save_csv=False):
     """
     Derive ED/ES timings from the ventricle volume curve (from Connectivity mesh).
     - Computes volumes for the N input frames (startFrameID..endFrameID)
@@ -489,6 +491,12 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
     t_frames = np.arange(N, dtype=float) * dt_frame  # [0, RR) in N bins
     
     if plot_input_dirbase != "":
+        base_conn_dir = os.path.join(plot_input_dirbase, "Connectivity")
+        base_errors = _connectivity_errors(base_conn_dir, start_id, end_id)
+        if base_errors:
+            raise RuntimeError(
+                "Raw/base connectivity pre-check failed:\n" + "\n".join("- " + e for e in base_errors)
+            )
         facespathbase = os.path.join(plot_input_dirbase, "Connectivity", "ventricle_faces.txt")
         facesbase = _load_faces_connectivity(facespathbase)
         
@@ -497,10 +505,8 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
         # Volumes for original frames
         frame_ids_base = list(range(start_id, end_id + 1))
         vol_mm3_base = []
-        verts_frames_base = []
         for fid in frame_ids_base:
             vertsbase = _load_verts_connectivity(vertspathbase,fid)
-            verts_frames_base.append(verts)
             vol_mm3_base.append(_mesh_volume_mm3(vertsbase, facesbase))
         vol_mm3_base = np.asarray(vol_mm3_base, dtype=float)
         vol_ml_base = vol_mm3_base / 1000.0  # mm^3 -> mL
@@ -635,10 +641,10 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
     # For visualization, add a wrap-around point at t=RR to show periodic closure.
     t_frames_plot = np.concatenate([t_frames, [rr_ms]])
     vol_frames_plot = np.concatenate([vol_ml, [vol_ml[0]]])
+    plt.plot(t_frames_plot, vol_frames_plot, marker="o", linewidth=1.0, label="Original STL frames")
     if plot_input_dirbase != "":
         vol_frames_plotbase = np.concatenate([vol_ml_base, [vol_ml_base[0]]])
-    plt.plot(t_frames_plot, vol_frames_plot, marker="o", linewidth=1.0, label="Original STL frames")
-    plt.plot(t_frames_plot, vol_frames_plotbase, marker="o", linewidth=1.0, label="Raw frames")
+        plt.plot(t_frames_plot, vol_frames_plotbase, marker="o", linewidth=1.0, label="Raw frames")
 
     plt.xlabel("Time in ms")
     plt.ylabel("LV volume in mL")
