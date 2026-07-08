@@ -146,16 +146,22 @@ Select all ventricle objects and either run all steps with the button 'Quick rec
 By selecting all objects to delete and pressing quick reset, it will import all the files saved from the last 'Translate and Rotate' process. However, it will still use the directory specified in the "Import folder" as a reference point to find the temporary export to quick import.
 
 ## Export files
-![Image of the dev tools panel](/readme_images/File_management_export_directory.png)\
-Select all files to export in Blender.
-File→Export→.STL→
+Option 1: Export ventricle function
+- specify the path in `Export folder`
+- select all objects to export
+- klick `Export ventricle`\
+![Image of the dev tools panel](/readme_images/File_management_export_directory.png)
+
+Option 2: Use Blender built-in export. For this:
+
+Select all objects to export. Then go to `File→Export→.STL→...`
 - tick ASCII checkbox
 - Batch Mode Object
-- tick selection nnly checkbox
+- tick selection only checkbox
 - keep the other options at default
 - leave name empty\
 →export STL
-- Video on how to use the pipeline in further CFD simulations at https://www.youtube.com/watch?v=C1O20YvkCJs
+
 ## Optional usage: Development tools panel
 ![Image of the dev tools panel](/readme_images/Dev_tools.png)
 ### Compute volumes
@@ -175,24 +181,58 @@ During the usage of the pipeline the longitudinal shift is saved as a variable b
 ### Transform Objects
 By selecting multiple meshes with similar orientation, this button picks a mesh to use as reference, and then creates of copy and transform it into each of the other selected meshes. This aims to make sure that all the meshes share the same topology. It is transformed using a BvH Tree based transformation.
 
-# Plot STL values
+# Comparison of volume curves (raw vs. reconstructed)
 ![Image of the plotting functionality](/readme_images/Plot_function.png)\
-After exporting the pipeline, the values of the exported STL and it's interpolation can be plotted to visualize the data.
-Both top paths are used to specify where to draw the input directory to be used for plotting.
-Click on "Display STL plot" to just display the plot or on "Save STL plot" to save the STL plot as the **specificied file name** (in bottom right) alongside other relevant files into the **specified path** (in bottom left).
+This panel (labelled **"Comparison of volume curves"** in the *Development tools* panel) compares the left-ventricular **volume over the cardiac cycle** of your **raw input data** against the **reconstructed geometries** produced by this pipeline. It draws three curves — the raw frames, the reconstructed frames, and the temporally interpolated reconstruction — and marks end-diastole (**ED**, volume maximum) and end-systole (**ES**, volume minimum). Use it to judge how well the reconstruction preserves the volume dynamics.
 
-The selected input directory should contain all the .stl files to be plotted ordered numerically with a sub-directory named "Connectivity". "Connectiviy" contains all the vertices and faces.
-As example:\
-This is how the selected input plot directory would look like:
-![Image of the plot input directory](/readme_images/input_plot_dir.png)\
-And this is how the connectivity sub-directory would look like:
-![Image of the plot input directory](/readme_images/Connectivity_sub_dir_example.png)
+Volumes are computed from the mesh **connectivity** (`Connectivity/*.txt`), not from the STL files directly, so both the raw and the reconstructed side must have been exported together with their `Connectivity/` folder (see the structure below).
+
+**Prerequisites**
+- Run **"Translate and rotate"** first — it writes the raw, aligned data (including its `Connectivity/`) into `<Import folder>/rotated/`.
+- **Export** the reconstructed ventricles (**"Export ventricle"**) so the processed geometries also have a `Connectivity/` folder.
+
+**Inputs — set these before running**
+- **Import folder** (in the *File* panel) — points at the raw STL frames. The raw comparison data is taken from `<Import folder>/rotated/`. If that folder is missing, you are asked to run *Translate and rotate* first.
+- **`inputPython.txt`** — the settings file shared with the rest of the pipeline (RR duration, number of frames, start/end frame, interpolation method). It is found **automatically** in the *Import folder* or **one level above** it — there is no field for it.
+- **Processed geometries** (in this panel) — the folder holding the reconstructed geometries to compare. **If it is left empty, the *Export folder* is used instead.**
+
+**Running it**
+- **Show** — displays the plot. If an interactive matplotlib backend is available (a Qt binding such as *PyQt5* installed in Blender's Python), an interactive window opens; otherwise the plot is written to a temporary PNG and opened with your operating system's default image viewer.
+- **Save** — writes the plot and the underlying data to disk (see *Outputs*).
+
+**Outputs** — **Save** writes into `<Processed geometries>/volume_comparison/`:
+- `volume_curve_comparison.png` — the plotted curves
+- `_volume_frames_volumes.csv` — per-frame volumes of the reconstructed geometry
+- `_volume_interp_volumes.csv` — the interpolated volume curve
+
+If a required input is missing (no `rotated/`, no `inputPython.txt`, or no valid *Processed geometries* folder), a clear warning is printed to the Blender **System Console** (`Window → Toggle System Console`) and nothing is plotted.
+
+**Case folder structure**\
+A typical case is organised as shown below; the entries relevant to this panel are annotated. The *Processed geometries* / *Export folder* does **not** have to live inside the case folder — it can be anywhere; this is just a common layout.
+```
+<case>/
+├── inputPython.txt              ← settings; found here or inside the Import folder
+├── STL/                         ← set as "Import folder" (the raw STL frames)
+│   └── rotated/                 ← created by "Translate and rotate" -> RAW comparison data
+│       ├── ventricle_0.stl, ventricle_1.stl, ...
+│       └── Connectivity/
+│           ├── ventricle_faces.txt
+│           └── ventricle_verts_0.txt, ventricle_verts_1.txt, ...
+├── export/                      ← "Export folder" / "Processed geometries" -> RECONSTRUCTED data
+│   ├── ventricle_0.stl, ventricle_1.stl, ...
+│   ├── Connectivity/
+│   │   ├── ventricle_faces.txt
+│   │   └── ventricle_verts_0.txt, ...
+│   └── volume_comparison/       ← created by "Save" (png + csv outputs)
+└── calc_valve_diameters_outputs/
+```
 
 # Authors and acknowledgment
 - Author: Daniel Verhülsdonk
 - Supervision by: Jan-Niklas Thiel (thiel@ame.rwth-aachen.de) and Michael Neidlin
 
 # Application
+Video on how to use the pipeline in further CFD simulations at https://www.youtube.com/watch?v=C1O20YvkCJs\
 This tool was used in the following 2 publications:
 
 ### 1. Quantifying the Impact of Mitral Valve Anatomy on Clinical Markers Using Surrogate Models and Sensitivity Analysis

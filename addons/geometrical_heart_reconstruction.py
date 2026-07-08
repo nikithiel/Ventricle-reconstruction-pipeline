@@ -29,7 +29,7 @@ import multiprocessing as mp
 from pathlib import Path
 
 
-from stl_plot import check_stl_and_connectivity, derive_ed_es_from_volume_curve, parseRunTimeVariables_unique
+from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors
 from calculate_valve_diameters import main_calc_diameter
 scene = bpy.types.Scene
 
@@ -2135,7 +2135,7 @@ class PANEL_Dev_tools(bpy.types.Panel):
         layout.label(text='Comparison of volume curves')
         # Plot STL setting file
         row = layout.row()
-        row.prop(context.scene, "plot_input_path", text = "Plot inputs")
+        row.prop(context.scene, "plot_input_path", text = "Processed geometries")
         # Plot STL and display
         row = layout.row(align=True)
         row.operator('heart.plot_stl', text = "Show", icon = 'AXIS_FRONT')
@@ -2374,80 +2374,144 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
 
         return {'FINISHED'}
 
+def resolve_volume_comparison_paths(scene):
+    """Resolve and validate all inputs for the volume-curve comparison.
+
+    Folder layout:
+      <Import folder>        = the STL frames folder (ventricle_import_dir)
+        rotated/             = raw data, created by 'Translate and rotate'
+      <Import folder>/..     = case folder, holds inputPython.txt (one level above)
+      <Processed geometries> = reconstructed geometries (ventricle_export_dir); may live anywhere
+
+    Returns a dict (inputsetting, plot_input_dir, rotated_dir, interpolMethod) on success,
+    or None after printing a user-facing warning if a required input is missing.
+    """
+    import_dir = bpy.path.abspath((scene.ventricle_import_dir or "").strip())
+
+    # (1) Raw data: <import>/rotated
+    rotated_dir = os.path.join(import_dir, "rotated")
+    if not os.path.isdir(rotated_dir):
+        cons_print(
+            f"Volume comparison: no 'rotated' folder found in the import folder "
+            f"('{rotated_dir}'). Create it first with 'Translate and rotate'."
+        )
+        return None
+
+    # (2) Settings: inputPython.txt in the import folder or one level above it (case folder)
+    inputsetting = None
+    for cand in (
+        os.path.join(import_dir, "inputPython.txt"),
+        os.path.join(os.path.dirname(os.path.normpath(import_dir)), "inputPython.txt"),
+    ):
+        if os.path.isfile(cand):
+            inputsetting = cand
+            break
+    if inputsetting is None:
+        cons_print(
+            f"Volume comparison: 'inputPython.txt' not found in the import folder "
+            f"('{import_dir}') or one level above it."
+        )
+        return None
+
+    # (3) Processed geometries: use 'Processed geometries' path, else fall back to Export folder
+    processed_raw = (scene.plot_input_path or "").strip()
+    if processed_raw in ("", "//"):
+        processed_raw = (scene.ventricle_export_dir or "").strip()
+    plot_input_dir = bpy.path.abspath(processed_raw)
+    if not os.path.isdir(plot_input_dir):
+        cons_print(
+            f"Volume comparison: processed-geometries folder not found ('{plot_input_dir}'). "
+            f"Set 'Processed geometries' or the 'Export folder', and export the reconstructed "
+            f"ventricle first."
+        )
+        return None
+
+    # Runtime settings (frame range + interpolation method)
+    (_, _, sFrameID, eFrameID, numFrame, _, interpolMethod) = parseRunTimeVariables_unique(inputsetting)
+
+    # (3b) Connectivity-only pre-check of the processed-geometries folder
+    conn_errors = _connectivity_errors(os.path.join(plot_input_dir, "Connectivity"), sFrameID, eFrameID)
+    if conn_errors:
+        cons_print(
+            "Volume comparison: connectivity check of the processed-geometries folder failed:\n"
+            + "\n".join("- " + e for e in conn_errors)
+            + "\nExport the reconstructed ventricle first."
+        )
+        return None
+
+    return {
+        "inputsetting": inputsetting,
+        "plot_input_dir": plot_input_dir,
+        "rotated_dir": rotated_dir,
+        "interpolMethod": interpolMethod,
+    }
+
 class MESH_OT_plot_STL(bpy.types.Operator):
     """Display the plot"""
     bl_idname = 'heart.plot_stl'
     bl_label = 'plot STL files'
     
     def execute(self,context):
-        scene = context.scene
-        
-        plot_input_dir = bpy.path.abspath((scene.plot_input_path or "").strip())
-        plot_base_dir = os.path.join(bpy.path.abspath((scene.ventricle_import_dir or "").strip()), "rotated")
-        
-        for filename in os.listdir(plot_input_dir):
-            print(filename)
-            if Path(filename).suffix == ".txt":
-                inputsetting = os.path.join(plot_input_dir,filename)
-                break
-        
-        (
-            correlationFlag,
-            frameID,
-            sFrameID,
-            eFrameID,
-            numFrame,
-            numInter,
-            interpolMethod,
-        ) = parseRunTimeVariables_unique(inputsetting)
+        paths = resolve_volume_comparison_paths(context.scene)
+        if paths is None:
+            return {'CANCELLED'}
 
-        # Pre-check STL and connectivity inputs
-        check_stl_and_connectivity(plot_input_dir, numFrame, sFrameID, eFrameID)
+        # A figure's canvas is bound to the backend active when it is created, and
+        # calculate_valve_diameters forces 'Agg' at import. So try to activate an
+        # interactive Qt backend BEFORE building the figure. If no Qt binding is
+        # available this stays on Agg and we fall back to a temp PNG opened with the
+        # OS default viewer, so 'Show' works on every machine.
+        non_gui = {"agg", "cairo", "pdf", "pgf", "ps", "svg", "template"}
+        if matplotlib.get_backend().lower() in non_gui:
+            try:
+                plt.switch_backend("QtAgg")
+            except Exception as e:
+                cons_print(f"Volume comparison: no interactive backend ({e}); using PNG fallback.")
 
-        _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_base_dir, interpolMethod, "volume", False)
+        _,_,_, fig = derive_ed_es_from_volume_curve(
+            paths["inputsetting"], paths["plot_input_dir"], paths["rotated_dir"],
+            paths["interpolMethod"], "volume", False)
 
-        plt.show(block=True)
-        
-        return{'FINISHED'}   
-     
+        def _open_as_png():
+            tmp_png = os.path.join(bpy.app.tempdir, "volume_curve_comparison.png")
+            fig.savefig(tmp_png)
+            plt.close(fig)
+            bpy.ops.wm.path_open(filepath=tmp_png)
+            cons_print(f"Volume comparison: opened '{tmp_png}'.")
+
+        if matplotlib.get_backend().lower() in non_gui:
+            _open_as_png()
+        else:
+            try:
+                plt.show(block=True)
+                plt.close(fig)
+            except Exception as e:
+                cons_print(f"Volume comparison: interactive show failed ({e}); using PNG fallback.")
+                _open_as_png()
+
+        return{'FINISHED'}
+
 class MESH_OT_save_plot_STL(bpy.types.Operator):
     """Save the plot without displaying and also any additional files within the input folder"""
     bl_idname = 'heart.save_plot_stl'
     bl_label = 'plot STL files'
     
     def execute(self,context):
-        scene = context.scene
-        
-        plot_input_dir = bpy.path.abspath((scene.plot_input_path or "").strip())
-        plot_base_dir = os.path.join(bpy.path.abspath((scene.ventricle_import_dir or "").strip()), "rotated")
-        
-        for filename in os.listdir(plot_input_dir):
-            print(filename)
-            if Path(filename).suffix == ".txt":
-                inputsetting = os.path.join(plot_input_dir,filename)
-                break
-        
-        (
-            correlationFlag,
-            frameID,
-            sFrameID,
-            eFrameID,
-            numFrame,
-            numInter,
-            interpolMethod,
-        ) = parseRunTimeVariables_unique(inputsetting)
+        paths = resolve_volume_comparison_paths(context.scene)
+        if paths is None:
+            return {'CANCELLED'}
 
-        # Pre-check STL and connectivity inputs
-        check_stl_and_connectivity(plot_input_dir, numFrame, sFrameID, eFrameID)
-        
-        os.makedirs(os.path.join(plot_input_dir,"volume_comparison"), exist_ok=True)
+        out_dir = os.path.join(paths["plot_input_dir"], "volume_comparison")
+        os.makedirs(out_dir, exist_ok=True)
 
-        _,_,_, fig = derive_ed_es_from_volume_curve(inputsetting, plot_input_dir, plot_base_dir, interpolMethod, "volume", True)
+        _,_,_, fig = derive_ed_es_from_volume_curve(
+            paths["inputsetting"], paths["plot_input_dir"], paths["rotated_dir"],
+            paths["interpolMethod"], "volume", True)
 
-        plot_path = os.path.join(plot_input_dir,"volume_comparison","volume_curve_comparison.png")
-        cons_print(plot_path)
+        plot_path = os.path.join(out_dir, "volume_curve_comparison.png")
         fig.savefig(plot_path)
-        
+        cons_print(f"Volume comparison: saved to '{out_dir}'")
+
         return{'FINISHED'}
 
 class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
@@ -2643,7 +2707,7 @@ scene_properties = {
     "ventricle_import_dir": bpy.props.StringProperty(name="Import folder", description="Folder to import the ventricle STL dataset", subtype='DIR_PATH', default="//"),
     # Export / CFD pipeline variables.
     "ventricle_export_dir": bpy.props.StringProperty(name="Export folder", description="Folder to export for ventricle connectivity/coordinates and STL export", subtype='DIR_PATH', default="//"),
-    "plot_input_path": bpy.props.StringProperty(name="Input directory for plotting", description="Directory for plotting input", subtype="DIR_PATH", default="//"),
+    "plot_input_path": bpy.props.StringProperty(name="Processed geometries", description="Folder with the processed (reconstructed) geometries from this pipeline, to compare against the raw data. If empty, the Export folder is used", subtype="DIR_PATH", default="//"),
 }
 
 def register(): # Register classes from scene_properties.
