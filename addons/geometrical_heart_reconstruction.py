@@ -35,7 +35,7 @@ import multiprocessing as mp
 from pathlib import Path
 
 
-from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors
+from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter
 scene = bpy.types.Scene
 
@@ -2503,6 +2503,22 @@ def _launch_plot_subprocess(input_path, plot_input_dir, base_dir, interp_method,
     return log_path
 
 
+def _report_volume_diff(inputsetting, plot_input_dir, rotated_dir):
+    """Print the per-frame processed-vs-raw volume % difference (min/max) to the Blender
+    console. derive_* prints the same numbers, but in the normal 'Show' path it runs in a
+    detached subprocess whose stdout only reaches a log file -- so recompute the cheap
+    per-frame diff (no interpolation) here to surface it where the user actually looks."""
+    try:
+        d = compute_frame_volume_diff(inputsetting, plot_input_dir, rotated_dir)
+    except Exception as e:
+        cons_print(f"Volume difference: could not compute ({e}).")
+        return
+    if d is None:
+        return
+    for line in format_volume_diff_lines(d):
+        cons_print(line)
+
+
 class MESH_OT_plot_STL(bpy.types.Operator):
     """Display the plot"""
     bl_idname = 'heart.plot_stl'
@@ -2590,6 +2606,11 @@ class MESH_OT_plot_STL(bpy.types.Operator):
             interpolMethod = paths["interpolMethod"]
             save_flag = False
 
+        # Surface the processed-vs-raw volume difference in the Blender console. The
+        # interactive plot runs in a detached subprocess whose stdout goes to a log file,
+        # so compute the cheap per-frame diff (no interpolation) here as well.
+        _report_volume_diff(inputsetting, plot_input_dir, rotated_dir)
+
         # Live outputs (kept next to the temp connectivity) + optional cleanup ownership.
         save_png = (os.path.join(click_dir, "volume_comparison", "volume_curve_comparison.png")
                     if scene.live_compare else "")
@@ -2655,6 +2676,8 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
 
         out_dir = os.path.join(paths["plot_input_dir"], "volume_comparison")
         os.makedirs(out_dir, exist_ok=True)
+
+        _report_volume_diff(paths["inputsetting"], paths["plot_input_dir"], paths["rotated_dir"])
 
         _,_,_, fig = derive_ed_es_from_volume_curve(
             paths["inputsetting"], paths["plot_input_dir"], paths["rotated_dir"],

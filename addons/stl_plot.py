@@ -430,6 +430,91 @@ def _mesh_volume_mm3(verts, faces):
     vol = np.sum(np.einsum("ij,ij->i", v0, np.cross(v1, v2))) / 6.0
     return float(abs(vol))
 
+def summarize_volume_diff(vol_processed_ml, vol_raw_ml, t_frames, frame_ids):
+    """Single source of truth for the processed-vs-raw volume difference metric.
+
+    Per-frame percentage difference and its min/max/absmax/absmean summary. Pure (no I/O),
+    so both the file-based comparison (derive_ed_es_from_volume_curve) and the in-Blender
+    console report (compute_frame_volume_diff) compute the numbers the exact same way.
+    Denominator is the raw volume, so diff_pct > 0 means the processed mesh OVER-estimates.
+    """
+    vol_processed_ml = np.asarray(vol_processed_ml, dtype=float)
+    vol_raw_ml = np.asarray(vol_raw_ml, dtype=float)
+    t_frames = np.asarray(t_frames, dtype=float)
+    frame_ids = list(frame_ids)
+
+    diff_pct = (vol_processed_ml - vol_raw_ml) / vol_raw_ml * 100.0
+    i_min = int(np.argmin(diff_pct))
+    i_max = int(np.argmax(diff_pct))
+    i_absmax = int(np.argmax(np.abs(diff_pct)))
+    return {
+        "frame_ids": frame_ids,
+        "time_ms": t_frames,
+        "vol_processed_ml": vol_processed_ml,
+        "vol_raw_ml": vol_raw_ml,
+        "diff_pct": diff_pct,
+        "min_pct": float(diff_pct[i_min]), "min_frame": frame_ids[i_min], "min_time_ms": float(t_frames[i_min]),
+        "max_pct": float(diff_pct[i_max]), "max_frame": frame_ids[i_max], "max_time_ms": float(t_frames[i_max]),
+        "absmax_pct": float(abs(diff_pct[i_absmax])), "absmax_frame": frame_ids[i_absmax],
+        "absmean_pct": float(np.mean(np.abs(diff_pct))),
+    }
+
+def format_volume_diff_lines(d):
+    """Console lines for a summarize_volume_diff() result. Single source for the text so the
+    subprocess log and the Blender console never drift apart."""
+    return [
+        "Volume difference (processed vs. raw = (processed - raw) / raw * 100):",
+        f"  min diff = {d['min_pct']:+.2f} %  at frame {d['min_frame']} (t = {d['min_time_ms']:.1f} ms)",
+        f"  max diff = {d['max_pct']:+.2f} %  at frame {d['max_frame']} (t = {d['max_time_ms']:.1f} ms)",
+        f"  max |diff| = {d['absmax_pct']:.2f} %  at frame {d['absmax_frame']};  "
+        f"mean |diff| = {d['absmean_pct']:.2f} %",
+    ]
+
+def compute_frame_volume_diff(input_path, plot_input_dir, plot_input_dirbase):
+    """Per-frame LV volume of processed vs. raw geometries and their percentage difference,
+    computed from the Connectivity meshes WITHOUT interpolation or plotting.
+
+    Cheap enough to run in Blender's main process (only the N input frames are loaded, no
+    dense temporal interpolation), so callers can surface the min/max difference in the
+    Blender console -- the interactive plot itself runs in a detached subprocess whose
+    stdout only reaches a log file.
+
+    Denominator is the raw volume, so diff_pct > 0 means the processed mesh OVER-estimates.
+    The min/max are computed over the same N input frames written to
+    _<prefix>_frames_volumes.csv, so the numbers match that file exactly.
+
+    Returns a dict (per-frame arrays + min/max/absmax/absmean summary), or None if no raw
+    folder was given. Raises RuntimeError on missing/invalid connectivity or input mismatch.
+    """
+    if not plot_input_dirbase:
+        return None
+
+    params = _read_input_kv(input_path)
+    N = int(float(params.get("numberFrames")))
+    start_id = int(float(params.get("startFrameID", 0)))
+    end_id = int(float(params.get("endFrameID", start_id + N - 1)))
+    rr_ms = float(params.get("RRDurationInMS"))
+    frame_ids = list(range(start_id, end_id + 1))
+    if len(frame_ids) != N:
+        raise RuntimeError(
+            f"Input mismatch: numberFrames={N} but startFrameID={start_id}, "
+            f"endFrameID={end_id} implies {len(frame_ids)} frames."
+        )
+
+    def _frame_volumes_ml(folder):
+        conn = os.path.join(folder, "Connectivity")
+        errs = _connectivity_errors(conn, start_id, end_id)
+        if errs:
+            raise RuntimeError("Connectivity pre-check failed:\n" + "\n".join("- " + e for e in errs))
+        faces = _load_faces_connectivity(os.path.join(conn, "ventricle_faces.txt"))
+        vols = [_mesh_volume_mm3(_load_verts_connectivity(conn, fid), faces) for fid in frame_ids]
+        return np.asarray(vols, dtype=float) / 1000.0  # mm^3 -> mL
+
+    vol_proc = _frame_volumes_ml(plot_input_dir)
+    vol_raw = _frame_volumes_ml(plot_input_dirbase)
+    t_frames = np.arange(N, dtype=float) * (rr_ms / float(N))
+    return summarize_volume_diff(vol_proc, vol_raw, t_frames, frame_ids)
+
 def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_dirbase="", inter_method=None, out_prefix="volume", save_csv=False):
     """
     Derive ED/ES timings from the ventricle volume curve (from Connectivity mesh).
@@ -513,19 +598,12 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
         vol_mm3_base = np.asarray(vol_mm3_base, dtype=float)
         vol_ml_base = vol_mm3_base / 1000.0  # mm^3 -> mL
 
-        # Per-frame percentage difference of the processed geometry relative to the raw data.
-        # Denominator is the raw volume, so diff_pct > 0 means the processed mesh OVER-estimates.
-        diff_pct = (vol_ml - vol_ml_base) / vol_ml_base * 100.0
-        i_min = int(np.argmin(diff_pct))
-        i_max = int(np.argmax(diff_pct))
-        i_absmax = int(np.argmax(np.abs(diff_pct)))
-        print("Volume difference (processed vs. raw = (processed - raw) / raw * 100):")
-        print(f"  min diff = {diff_pct[i_min]:+.2f} %  at frame {frame_ids[i_min]} "
-              f"(t = {t_frames[i_min]:.1f} ms)")
-        print(f"  max diff = {diff_pct[i_max]:+.2f} %  at frame {frame_ids[i_max]} "
-              f"(t = {t_frames[i_max]:.1f} ms)")
-        print(f"  max |diff| = {abs(diff_pct[i_absmax]):.2f} %  at frame {frame_ids[i_absmax]};  "
-              f"mean |diff| = {float(np.mean(np.abs(diff_pct))):.2f} %")
+        # Per-frame % difference (processed vs. raw). summarize_volume_diff is the single
+        # source of truth for the metric; format_volume_diff_lines for its console text.
+        vol_diff = summarize_volume_diff(vol_ml, vol_ml_base, t_frames, frame_ids)
+        diff_pct = vol_diff["diff_pct"]
+        for _line in format_volume_diff_lines(vol_diff):
+            print(_line)
 
 
     post_dir = plot_input_dir
@@ -707,10 +785,10 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
 
     if plot_input_dirbase != "":
         diag.update({
-            "diff_min_pct": float(diff_pct[i_min]),
-            "diff_max_pct": float(diff_pct[i_max]),
-            "diff_absmax_pct": float(abs(diff_pct[i_absmax])),
-            "diff_absmean_pct": float(np.mean(np.abs(diff_pct))),
+            "diff_min_pct": vol_diff["min_pct"],
+            "diff_max_pct": vol_diff["max_pct"],
+            "diff_absmax_pct": vol_diff["absmax_pct"],
+            "diff_absmean_pct": vol_diff["absmean_pct"],
         })
 
     return ed_ms, es_ms, diag, fig
