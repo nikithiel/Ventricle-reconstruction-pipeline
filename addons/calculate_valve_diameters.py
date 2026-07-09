@@ -22,6 +22,22 @@ import trimesh
 # IO / parsing
 # -----------------------------
 
+class ValveInputError(RuntimeError):
+    """Inputs for the valve-diameter calculation are missing or malformed.
+
+    Carries `errors`, a list of human-readable problems, so callers can render a
+    bullet list. Kept distinct from unexpected exceptions so the Blender operator
+    can show an actionable message for bad user data while genuine bugs still
+    surface as a normal traceback.
+    """
+
+    def __init__(self, errors: List[str],
+                 summary: str = "Valve-diameter inputs are invalid") -> None:
+        self.errors: List[str] = list(errors)
+        self.summary: str = summary
+        super().__init__(f"{summary}:\n" + "\n".join("- " + e for e in self.errors))
+
+
 def parse_inputpython_txt(path: Path) -> Dict[str, object]:
     """
     Parses lines: key value
@@ -746,6 +762,128 @@ def resolve_case_dir(stl_dir: Path) -> Path:
     return stl_dir.parent
 
 
+def _valve_input_errors(stl_dir: Path, case_dir: Path) -> List[str]:
+    """
+    Collect ALL problems with the valve-diameter inputs (empty list == usable).
+
+    Mirrors stl_plot._connectivity_errors: pure existence/parse checks, nothing is
+    written. `stl_dir` holds the numbered STL frames; `case_dir` is the resolved
+    folder that should hold inputPython.txt and the *_AV/_MV velocity CSVs.
+    """
+    errors: List[str] = []
+
+    # (1) STL frames: folder must exist and hold at least two distinct indices.
+    if not stl_dir.exists():
+        errors.append(f"STL folder does not exist: {stl_dir}")
+    elif not stl_dir.is_dir():
+        errors.append(f"STL path is not a folder: {stl_dir}")
+    else:
+        try:
+            idxs = sorted({i for i, _ in discover_phase_stls(stl_dir)})
+            if len(idxs) < 2:
+                errors.append(
+                    f"Need at least two numbered STL frames in {stl_dir}; "
+                    f"found indices {idxs}."
+                )
+        except FileNotFoundError:
+            errors.append(
+                f"No numbered STL frames (e.g. 'ventricle_0.stl' or '..._000.stl') "
+                f"found in: {stl_dir}"
+            )
+
+    # (2) inputPython.txt: name both folders resolve_case_dir considers.
+    input_txt = case_dir / "inputPython.txt"
+    params: Dict[str, object] = {}
+    if not input_txt.is_file():
+        errors.append(
+            f"'inputPython.txt' not found. Looked in the STL folder ({stl_dir}) "
+            f"and its parent ({stl_dir.parent})."
+        )
+    else:
+        params = parse_inputpython_txt(input_txt)
+
+    # (3) bpm_mv / bpm_av: present, numeric, > 0.
+    def positive_bpm(key: str) -> Optional[float]:
+        raw = params.get(key)
+        if raw is None:
+            if input_txt.is_file():
+                errors.append(
+                    f"'{key}' is missing from {input_txt}. Add a line such as "
+                    f"'{key} 85' (heart rate in beats per minute)."
+                )
+            return None
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            errors.append(f"'{key}' in {input_txt} is not a number: {raw!r}.")
+            return None
+        if not np.isfinite(val) or val <= 0:
+            errors.append(f"'{key}' in {input_txt} must be > 0 (got {val}).")
+            return None
+        return val
+
+    bpm = {"MV": positive_bpm("bpm_mv"), "AV": positive_bpm("bpm_av")}
+
+    # (4) Velocity CSVs: present, unique, parseable, and long enough for one beat.
+    av_file, mv_file = find_valve_files(case_dir)
+    for label, f in (("MV", mv_file), ("AV", av_file)):
+        if f is None:
+            errors.append(
+                f"No {label} velocity file (*_{label}.csv or *_{label}.scv) "
+                f"found in {case_dir}."
+            )
+            continue
+
+        candidates = sorted(list(case_dir.glob(f"*_{label}.csv"))
+                            + list(case_dir.glob(f"*_{label}.scv")))
+        if len(candidates) > 1:
+            errors.append(
+                f"Multiple {label} velocity files match in {case_dir}: "
+                f"{[c.name for c in candidates]}. Keep exactly one."
+            )
+
+        try:
+            df = read_velocity_csv(f)
+        except Exception as e:      # pandas ParserError/EmptyDataError, OSError, ...
+            errors.append(
+                f"{label} velocity file '{f.name}' could not be read: {e} "
+                f"(expected: no header, ';' separated, decimal comma, "
+                f"columns 'time;velocity' with velocity in cm/s)."
+            )
+            continue
+
+        # Same threshold as extract_best_cycle_by_time_peak_aligned, so the user
+        # learns about a too-short trace here instead of mid-fit.
+        b = bpm[label]
+        if b is not None:
+            T = 60.0 / b
+            span = float(df["t"].max() - df["t"].min())
+            if span < 0.9 * T:
+                errors.append(
+                    f"{label} Doppler trace '{f.name}' spans {span:.3g}s but one beat "
+                    f"at bpm_{label.lower()}={b:g} lasts {T:.3g}s; the recording is "
+                    f"shorter than one cycle. Use a longer trace or fix the bpm value."
+                )
+
+    return errors
+
+
+def validate_valve_inputs(root) -> Tuple[Path, Path]:
+    """
+    Resolve (stl_dir, case_dir) and fail fast if the inputs are unusable.
+
+    Raises ValveInputError carrying every problem at once, so one console message
+    lists everything the user has to fix. Writes nothing, hence safe to call before
+    any output folder is created.
+    """
+    stl_dir = Path(root)
+    case_dir = resolve_case_dir(stl_dir)
+    errors = _valve_input_errors(stl_dir, case_dir)
+    if errors:
+        raise ValveInputError(errors)
+    return stl_dir, case_dir
+
+
 def process_case(case_dir: Path, n_phase: int = 400, stl_dir: Optional[Path] = None) -> CaseData:
     # case_dir -> holds inputPython.txt, the AV/MV CSVs, and receives the outputs
     # stl_dir  -> holds the mesh frames; defaults to case_dir (flat layout)
@@ -984,8 +1122,10 @@ def main_calc_diameter(root, n_phase):
     # frames (your '/STL/' export). inputPython.txt and the AV/MV CSVs may sit
     # there or one level up; resolve_case_dir figures out which. All outputs go
     # under the resolved case folder.
-    stl_dir = Path(root)
-    case_dir = resolve_case_dir(stl_dir)
+    #
+    # Validate first: a missing CSV or bpm key would otherwise skip a fit block
+    # silently and hand back nan radii instead of an error.
+    stl_dir, case_dir = validate_valve_inputs(root)
 
     out_dir = case_dir / "calc_valve_diameters_outputs"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -995,10 +1135,29 @@ def main_calc_diameter(root, n_phase):
 
     case, _ = process_case(case_dir, n_phase=n_phase, stl_dir=stl_dir)
     #figs.append(fig)
+
+    r_mv_minor = case.fit.get("d_MV_minor", np.nan)/2
+    r_mv_major = case.fit.get("d_MV_major", np.nan)/2
+    r_av = case.fit.get("d_AV", np.nan)/2
+
+    # Safety net: the inputs were fine, so a non-finite radius means the fit itself
+    # degenerated (fit_scaling_signed / area_to_* return nan on a vanishing scale).
+    non_finite = [name for name, v in (("MV minor radius", r_mv_minor),
+                                       ("MV major radius", r_mv_major),
+                                       ("AV radius", r_av)) if not np.isfinite(v)]
+    if non_finite:
+        raise ValveInputError(
+            [f"The fit produced a non-finite {n}." for n in non_finite]
+            + ["The Doppler traces and the STL volume curve may be incompatible "
+               "(the fitted scale collapsed to zero). Check the *_MV/*_AV CSVs and "
+               "the bpm_mv/bpm_av values."],
+            summary="Valve-diameter fit produced a non-finite result",
+        )
+
     summary_rows.append({
-        "r_MV_minor": case.fit.get("d_MV_minor", np.nan)/2,
-        "r_MV_major": case.fit.get("d_MV_major", np.nan)/2,
-        "r_AV": case.fit.get("d_AV", np.nan)/2,
+        "r_MV_minor": r_mv_minor,
+        "r_MV_major": r_mv_major,
+        "r_AV": r_av,
         "path": case.path,
         "bpm_mv": case.bpm_mv,
         "bpm_av": case.bpm_av,
@@ -1010,5 +1169,5 @@ def main_calc_diameter(root, n_phase):
     })
 
     pd.DataFrame(summary_rows).to_csv(out_dir / "summary.csv", index=False)
-    
-    return figs, (case.fit.get("d_MV_minor", np.nan)/2, case.fit.get("d_MV_major", np.nan)/2, case.fit.get("d_AV", np.nan)/2)
+
+    return figs, (r_mv_minor, r_mv_major, r_av)

@@ -25,6 +25,7 @@ import sys
 import subprocess
 import importlib.util
 import time
+import warnings
 
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -36,7 +37,7 @@ from pathlib import Path
 
 
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
-from calculate_valve_diameters import main_calc_diameter
+from calculate_valve_diameters import main_calc_diameter, ValveInputError
 scene = bpy.types.Scene
 
 dev_env_tools = True
@@ -2737,19 +2738,49 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
     bl_label = 'Calculate Valve Diameter'
     
     def execute(self,context):
+        _cons_rule("Calculate valve radii")
         scene = context.scene
-        diam_dir_raw = bpy.path.abspath((scene.ventricle_import_dir or "").strip())
-        if not diam_dir_raw:
-            diam_dir_raw = "//"
-        cons_print(f"Currently calculating valve diameter")
-        
-        figs, res = main_calc_diameter(diam_dir_raw, 400)
-        
-        context.scene.mitral_radius_small = res[0] * 1000
-        context.scene.mitral_radius_long = res[1] * 1000
-        context.scene.aortic_radius = res[2] * 1000
-        
-        
+
+        # No silent fallback to '//': an unset import folder used to resolve to the
+        # .blend directory and fail somewhere deep inside the computation.
+        raw_dir = (scene.ventricle_import_dir or "").strip()
+        import_dir = bpy.path.abspath(raw_dir) if raw_dir else ""
+        if not os.path.isdir(import_dir):
+            msg = ("Calculate radii: set the 'Import folder' to the folder holding the "
+                   f"numbered ventricle STL frames (current value: '{raw_dir or '<empty>'}').")
+            cons_print(msg)
+            self.report({'ERROR'}, msg)
+            return {'CANCELLED'}
+
+        cons_print(f"Calculating valve radii from: {import_dir}")
+
+        try:
+            # calculate_valve_diameters is bpy-free and reports through warnings.warn,
+            # which never reaches Blender's console -- collect and forward them here.
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                try:
+                    figs, res = main_calc_diameter(import_dir, 400)
+                finally:
+                    for w in caught:
+                        cons_print(f"Warning: {w.message}")
+        except ValveInputError as err:
+            cons_print("Calculate radii: cannot compute - please fix the inputs:")
+            for problem in err.errors:
+                cons_print(f"  - {problem}")
+            self.report({'ERROR'}, err.summary)
+            return {'CANCELLED'}
+
+        # Reached on success only, so the scene keeps its previous radii on failure.
+        r_mv_small, r_mv_long, r_av = res[0] * 1000, res[1] * 1000, res[2] * 1000
+        scene.mitral_radius_small = r_mv_small
+        scene.mitral_radius_long = r_mv_long
+        scene.aortic_radius = r_av
+
+        msg = (f"Calculate radii: MV small={r_mv_small:.3f} mm, "
+               f"MV long={r_mv_long:.3f} mm, AV={r_av:.3f} mm.")
+        cons_print(msg)
+        self.report({'INFO'}, msg)
         return{"FINISHED"}
             
 # -------------------------------------------------------------------
