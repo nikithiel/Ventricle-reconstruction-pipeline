@@ -38,6 +38,13 @@ from pathlib import Path
 
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
+
+try: # A broken settings log must never keep the addon from registering.
+    import session_log
+except Exception as _session_log_error:
+    session_log = None
+    print(f"[GVR] session_log unavailable: {_session_log_error}")
+
 scene = bpy.types.Scene
 
 dev_env_tools = True
@@ -156,8 +163,9 @@ class MESH_OT_ventricle_rotate(bpy.types.Operator):
     """Rotate Ventricle using the node-coordinates of the basal, apical and septum node"""
     bl_idname = 'heart.ventricle_rotate'
     bl_label = 'Rotate Ventricle using the node-coordinates of the basal, apical and septum node.' 
-    def execute(self, context): 
-        if not rotate_ventricle(context): return{'CANCELLED'}
+    def execute(self, context):
+        rotation = rotate_ventricle(context)
+        if not rotation: return{'CANCELLED'}
         scene = context.scene
         view_layer = context.view_layer
 
@@ -275,6 +283,17 @@ class MESH_OT_ventricle_rotate(bpy.types.Operator):
             cons_print(f"Export ventricle: error writing manifest file: {e}")
             # Don't cancel export; STLs and verts already written.
 
+        # ------------------------------------------------------------------
+        # 9) Write the picked landmarks and the applied transformation next to the raw data
+        # ------------------------------------------------------------------
+        if session_log:
+            try:
+                log_path = session_log.write_rotation_log(scene, base_dir, rotation)
+                if log_path:
+                    cons_print(f"Rotation log -> '{log_path}'")
+            except Exception as e:
+                cons_print(f"Rotation log: could not be written: {e}")
+
         # Single, light console summary line
         cons_print(
             f"Export ventricle: STL -> '{base_dir}', connectivity -> '{connectivity_dir}', manifest -> '{manifest_path}'"
@@ -283,12 +302,20 @@ class MESH_OT_ventricle_rotate(bpy.types.Operator):
         return {'FINISHED'}
 
 def rotate_ventricle(context):
-    """Rotate ventricle geometry using three points on the ventricle"""
+    """Rotate ventricle geometry using three points on the ventricle.
+
+    Returns a dict describing the applied transformation, or None if the rotation was aborted.
+    """
     ## Coniditions to terminate the code.
     if bpy.context.mode != 'OBJECT': bpy.ops.object.editmode_toggle() # Toggle to object mode.
     if len(bpy.context.selected_objects) < 1:# Only works if and object is selected
         cons_print("No object selected.")
-        return False
+        return None
+    # Keep the nodes the user picked: the code below overwrites pos_top/pos_septum with the
+    # post-rotation values and resets pos_bot to the origin.
+    context.scene.pos_top_selected = context.scene.pos_top[:]
+    context.scene.pos_bot_selected = context.scene.pos_bot[:]
+    context.scene.pos_septum_selected = context.scene.pos_septum[:]
     ## Precompute the rotation angles using the relative positions between top, bottom and septum node.
     # Initialize points.
     top = mathutils.Vector((context.scene.pos_top[0], context.scene.pos_top[1], context.scene.pos_top[2]))
@@ -316,8 +343,10 @@ def rotate_ventricle(context):
     context.scene.pos_septum = (round(abs(third_rot_septum[0]), 6), round(abs(third_rot_septum[1]), 6), round(abs(third_rot_septum[2]), 6)) # Update UI septum-variables.
     ## Translation and rotation-process for all selected objects.
     # Translation.
-    if context.scene.pos_bot != (0, 0, 0):   
+    translation = [0.0, 0.0, 0.0]
+    if context.scene.pos_bot != (0, 0, 0):
         # Translate Coordinate system to (0,0,0) by subtracting the bottom node for easier rotation
+        translation = [-bottom.x, -bottom.y, -bottom.z]
         bpy.ops.transform.translate(value=(-bottom), orient_axis_ortho='X', orient_type='GLOBAL', orient_matrix=((1, 0, 0), (0, 1, 0), (0, 0, 1)), orient_matrix_type='GLOBAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=False, proportional_edit_falloff='SMOOTH', proportional_size=1, use_proportional_connected=False, use_proportional_projected=False, release_confirm=True)
         bpy.ops.object.transform_apply(location=True, scale=False, rotation=False)
         # Update UI bottom-variables.
@@ -328,7 +357,13 @@ def rotate_ventricle(context):
     bpy.ops.transform.rotate(value=angle_z, orient_axis='Z', orient_type='GLOBAL', orient_matrix=((1, 0, 0), (0, 1, 0), (0, 0, 1)), orient_matrix_type='GLOBAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=False, proportional_edit_falloff='SMOOTH', proportional_size=1, use_proportional_connected=False, use_proportional_projected=False, release_confirm=True)
     # Apply all transformations.
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-    return True
+    # Persist the transformation so the settings log can reproduce it long after the rotation.
+    context.scene.last_rotation_angles = (angle_x, angle_y, angle_z)
+    context.scene.last_rotation_translation = translation
+    context.scene.last_rotation_time = time.strftime("%Y-%m-%d %H:%M:%S")
+    return {"rotation_rad": (angle_x, angle_y, angle_z),
+            "translation": translation,
+            "time": context.scene.last_rotation_time}
 
 def get_rotation_angle(numerator, denominator):
     """Function to quickly and reliably compute the rotation angle. Python tan-functions did not give the correct angles for some cases"""
@@ -2351,6 +2386,19 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
             cons_print(f"Export ventricle: error writing manifest file: {e}")
             # Don't cancel export; STLs and verts already written.
 
+        # ------------------------------------------------------------------
+        # 9) Write the final settings next to the exported geometries
+        # ------------------------------------------------------------------
+        if session_log:
+            try:
+                log_path = session_log.write_full_settings(
+                    scene, base_dir, trigger="export",
+                    addon_version=".".join(str(v) for v in bl_info["version"]))
+                if log_path:
+                    cons_print(f"Settings log -> '{log_path}'")
+            except Exception as e:
+                cons_print(f"Settings log: could not be written: {e}")
+
         # Single, light console summary line
         cons_print(
             f"Export ventricle: STL -> '{base_dir}', connectivity -> '{connectivity_dir}', manifest -> '{manifest_path}'"
@@ -2983,6 +3031,14 @@ scene_properties = {
     "pos_top": bpy.props.FloatVectorProperty(name="Top position", default=(0, 0, 1)),
     "pos_bot": bpy.props.FloatVectorProperty(name="Bottom position", default=(0, 0, 0)),
     "pos_septum": bpy.props.FloatVectorProperty(name="Septum position", default=(0, 1, 0)),
+    # Settings log. Not drawn in any panel: the nodes the user picked before 'Translate and
+    # rotate' overwrote pos_top/pos_bot/pos_septum, plus the transformation it applied.
+    "pos_top_selected": bpy.props.FloatVectorProperty(name="Selected top position", default=(0, 0, 0)),
+    "pos_bot_selected": bpy.props.FloatVectorProperty(name="Selected bottom position", default=(0, 0, 0)),
+    "pos_septum_selected": bpy.props.FloatVectorProperty(name="Selected septum position", default=(0, 0, 0)),
+    "last_rotation_angles": bpy.props.FloatVectorProperty(name="Angles of the last rotation in radians", default=(0, 0, 0)),
+    "last_rotation_translation": bpy.props.FloatVectorProperty(name="Translation of the last rotation", default=(0, 0, 0)),
+    "last_rotation_time": bpy.props.StringProperty(name="Time of the last rotation", default=""),
     # Mitral valve.
     "mitral_radius_long": bpy.props.FloatProperty(name="mitral_radius_long", default=6, min=0.01),
     "mitral_radius_small": bpy.props.FloatProperty(name="mitral_radius_small", default=3, min=0.01),
@@ -3033,9 +3089,19 @@ def register(): # Register classes from scene_properties.
     if dev_env_tools:
         for c in dev_classes:
             bpy.utils.register_class(c)
+    if session_log:
+        try:
+            session_log.start_session_logging(".".join(str(v) for v in bl_info["version"]))
+        except Exception as e:
+            print(f"[GVR] cannot start session logging: {e}")
 
-    
+
 def unregister(): # Unregister classes.
+    if session_log: # Before delattr, so no timer tick reads a scene property that is already gone.
+        try:
+            session_log.stop_session_logging()
+        except Exception as e:
+            print(f"[GVR] cannot stop session logging: {e}")
     for c in classes:
         bpy.utils.unregister_class(c)
     if dev_env_tools:
