@@ -2132,20 +2132,62 @@ class PANEL_Dev_tools(bpy.types.Panel):
 
 #----
 class MESH_OT_import_ventricle(bpy.types.Operator):
-    """Imports all stl files contained within the import directory"""
+    """Imports all indexed stl files contained within the import directory"""
     bl_idname = 'heart.import_ventricle'
     bl_label = 'Import ventricle data'
 
     def execute(self,context):
         scene = context.scene
-        
-        import_dir_raw = bpy.path.abspath((scene.ventricle_import_dir or "").strip())
-        if not import_dir_raw:
-            import_dir_raw = "//"
-        for name in os.listdir(import_dir_raw):
-            sub = re.compile(r'_\d+')
-            if sub.search(name): bpy.ops.import_mesh.stl(filepath=os.path.join(import_dir_raw,name))
-        return {'FINISHED'}
+
+        import_dir = bpy.path.abspath((scene.ventricle_import_dir or "").strip() or "//")
+        if not os.path.isdir(import_dir):
+            msg = f"Import ventricle: directory not found: '{import_dir}'"
+            cons_print(msg)
+            self.report({'ERROR'}, msg)
+            return {'CANCELLED'}
+
+        candidates = []
+        skipped = 0
+        for name in sorted(os.listdir(import_dir)):
+            stem, ext = os.path.splitext(name)
+            path = os.path.join(import_dir, name)
+            if ext.lower() != ".stl" or not os.path.isfile(path):
+                continue
+            index = get_ventricle_index_from_name(stem)
+            if index is None:
+                skipped += 1
+                continue
+            candidates.append((index, name, path))
+
+        if not candidates:
+            msg = (f"Import ventricle: no indexed .stl files in '{import_dir}'. "
+                   f"Expected names such as 'ventricle_0.stl', 'LV_(01).stl' or 'NJ 1.11 (1).stl'.")
+            cons_print(msg)
+            self.report({'WARNING'}, msg)
+            return {'CANCELLED'}
+
+        # Import order defines the frame order, so ambiguous indices must not pass silently.
+        candidates.sort()
+        indices = [index for index, _, _ in candidates]
+        duplicates = sorted({index for index in indices if indices.count(index) > 1})
+        if duplicates:
+            cons_print(f"Import ventricle: warning, duplicate frame indices {duplicates}; "
+                       f"files with the same index are ordered by name.")
+
+        imported = 0
+        for _, name, path in candidates:
+            try:
+                import_stl(path)
+                imported += 1
+            except Exception as exc:
+                cons_print(f"Import ventricle: failed to import '{name}': {exc}")
+
+        msg = f"Import ventricle: imported {imported}/{len(candidates)} stl files from '{import_dir}'."
+        if skipped:
+            msg += f" Skipped {skipped} stl file(s) without a trailing index."
+        cons_print(msg)
+        self.report({'INFO'} if imported else {'ERROR'}, msg)
+        return {'FINISHED'} if imported else {'CANCELLED'}
     
 class MESH_OT_quick_reset(bpy.types.Operator):
     """Quickly resets the state and reads the files in the temp folder in the import directory (WILL DELETE ANY SELECTED VERTICES)"""
@@ -2181,7 +2223,7 @@ class MESH_OT_quick_reset(bpy.types.Operator):
         for name in sorted(os.listdir(temp_path)):
             if name in skip or not name.lower().endswith(".stl"):
                 continue
-            bpy.ops.import_mesh.stl(filepath=os.path.join(temp_path, name))
+            import_stl(os.path.join(temp_path, name))
 
         return {'FINISHED'}
 
@@ -2714,21 +2756,26 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
 # Helpers for ventricle detection and STL export
 # -------------------------------------------------------------------
 
-# Look for names ending in "_<digits>" or "_(<digits>)", e.g. "..._0", "..._00", "..._(000)"
-VENTRICLE_SUFFIX_RE = re.compile(r"_\(?(\d+)\)?$")
+# Trailing index, optionally in parentheses, separated by '_', '-' or a space:
+#   "..._0", "..._00", "..._(000)", "...-1", "... (1)", "...(01)"
+# A separator or an opening parenthesis is required, so the trailing "11" of a name
+# like "NJ 1.11" is not mistaken for an index.
+VENTRICLE_SUFFIX_RE = re.compile(r"(?:[_\-\s]+\(?|\()(\d+)\)?\s*$")
 
 def get_ventricle_index_from_name(name: str):
     """
-    Return integer index from names like 'ventricle_0', 'LV_00', 'foo_000',
-    or None if there is no '_<digits>' suffix.
+    Return integer index from names like 'ventricle_0', 'LV_00', 'foo_(000)',
+    'NJ 1.11 (1)', or None if there is no trailing index.
     """
     m = VENTRICLE_SUFFIX_RE.search(name)
-    if not m:
-        return None
-    try:
-        return int(m.group(1))
-    except ValueError:
-        return None
+    return int(m.group(1)) if m else None
+
+def import_stl(filepath):
+    """Import a single STL file with whichever importer this Blender version ships."""
+    if "stl_import" in dir(bpy.ops.wm):
+        bpy.ops.wm.stl_import(filepath=filepath)
+    else:
+        bpy.ops.import_mesh.stl(filepath=filepath)
 
 def find_ventricle_objects(objs):
     """
