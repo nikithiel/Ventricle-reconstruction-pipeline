@@ -441,8 +441,10 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
     - Finds ED (max) and ES (min) on that interpolated curve.
 
     Outputs:
-      - <out_prefix>_frames_volumes.csv  (frame_i, frameID, time_ms, volume_mL)
+      - <out_prefix>_frames_volumes.csv  (per input frame; when raw data is present:
+        frame_i, frameID, time_ms, volume_raw_mL, volume_processed_mL, diff_percent)
       - <out_prefix>_curve.png          (volume curve + ED/ES lines)
+    Also prints the min/max per-frame percentage difference (processed vs. raw) to the console.
     Returns:
       ed_ms, es_ms (float, in ms), plus diagnostic dict.
     """
@@ -511,7 +513,21 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
         vol_mm3_base = np.asarray(vol_mm3_base, dtype=float)
         vol_ml_base = vol_mm3_base / 1000.0  # mm^3 -> mL
 
-    
+        # Per-frame percentage difference of the processed geometry relative to the raw data.
+        # Denominator is the raw volume, so diff_pct > 0 means the processed mesh OVER-estimates.
+        diff_pct = (vol_ml - vol_ml_base) / vol_ml_base * 100.0
+        i_min = int(np.argmin(diff_pct))
+        i_max = int(np.argmax(diff_pct))
+        i_absmax = int(np.argmax(np.abs(diff_pct)))
+        print("Volume difference (processed vs. raw = (processed - raw) / raw * 100):")
+        print(f"  min diff = {diff_pct[i_min]:+.2f} %  at frame {frame_ids[i_min]} "
+              f"(t = {t_frames[i_min]:.1f} ms)")
+        print(f"  max diff = {diff_pct[i_max]:+.2f} %  at frame {frame_ids[i_max]} "
+              f"(t = {t_frames[i_max]:.1f} ms)")
+        print(f"  max |diff| = {abs(diff_pct[i_absmax]):.2f} %  at frame {frame_ids[i_absmax]};  "
+              f"mean |diff| = {float(np.mean(np.abs(diff_pct))):.2f} %")
+
+
     post_dir = plot_input_dir
     if save_csv: 
         # Export per-frame volumes
@@ -522,9 +538,18 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
 
         with open(csv_path, "w+", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["frame_i", "frameID", "time_ms", "volume_mL"])
-            for i, fid in enumerate(frame_ids):
-                w.writerow([i, fid, f"{t_frames[i]:.6f}", f"{vol_ml[i]:.6f}"])
+            if plot_input_dirbase != "":
+                # Raw present: store raw volume, processed volume and their % difference.
+                w.writerow(["frame_i", "frameID", "time_ms",
+                            "volume_raw_mL", "volume_processed_mL", "diff_percent"])
+                for i, fid in enumerate(frame_ids):
+                    w.writerow([i, fid, f"{t_frames[i]:.6f}",
+                                f"{vol_ml_base[i]:.6f}", f"{vol_ml[i]:.6f}",
+                                f"{diff_pct[i]:.6f}"])
+            else:
+                w.writerow(["frame_i", "frameID", "time_ms", "volume_mL"])
+                for i, fid in enumerate(frame_ids):
+                    w.writerow([i, fid, f"{t_frames[i]:.6f}", f"{vol_ml[i]:.6f}"])
 
     # Interpolate FULL MESH to match UDFPTS temporal resolution (compute volume at every interpolated time step)
     # UDFPTS has (numInterm * numberFrames + 1) frames over one cycle, including a periodic duplicate of the start state.
@@ -679,5 +704,13 @@ def derive_ed_es_from_volume_curve(input_path="",plot_input_dir="", plot_input_d
         #"interp_csv_path": str(csv_interp_path),
         "fig_path": str(fig_path),
     }
+
+    if plot_input_dirbase != "":
+        diag.update({
+            "diff_min_pct": float(diff_pct[i_min]),
+            "diff_max_pct": float(diff_pct[i_max]),
+            "diff_absmax_pct": float(abs(diff_pct[i_absmax])),
+            "diff_absmean_pct": float(np.mean(np.abs(diff_pct))),
+        })
 
     return ed_ms, es_ms, diag, fig
