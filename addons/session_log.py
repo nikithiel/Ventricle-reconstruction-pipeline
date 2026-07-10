@@ -196,6 +196,8 @@ def build_full_settings(scene, *, trigger, addon_version=""):
                 "max_con_sm_iter": int(scene.max_con_sm_iter),
                 "min_con_sm_iter": int(scene.min_con_sm_iter),
                 "sm_reps": int(scene.sm_reps),
+                "con_fade_percentage": _f(scene.con_fade_percentage),
+                "final_sm_iter": int(scene.final_sm_iter),
             },
         },
         "pipeline": {

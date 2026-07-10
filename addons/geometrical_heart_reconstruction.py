@@ -1450,36 +1450,110 @@ def compute_smoothing_iteration_factor_connection(context, counter, volumelist):
         smoothing_iter_factor *= 2
     return smoothing_iter_factor
 
-def smooth_connection_and_basal_region(context, obj, smoothing_iter_factor): 
+def build_vertex_neighbourhood(bm):
+    """Return the symmetric edge list and the valence of every vertex.
+
+    The two index arrays let np.bincount average over the direct edge neighbours of
+    a vertex without rebuilding the adjacency in every smoothing iteration.
+    """
+    edges = np.array([(e.verts[0].index, e.verts[1].index) for e in bm.edges], dtype=np.int64)
+    vertex_indices = np.concatenate((edges[:, 0], edges[:, 1]))
+    neighbour_indices = np.concatenate((edges[:, 1], edges[:, 0]))
+    valence = np.bincount(vertex_indices, minlength=len(bm.verts))
+    return vertex_indices, neighbour_indices, valence
+
+def vertex_group_mask(obj, bm, group_names):
+    """Return a boolean mask of all vertices belonging to any of the given vertex groups"""
+    deform_layer = bm.verts.layers.deform.active
+    mask = np.zeros(len(bm.verts), dtype=bool)
+    if deform_layer is None: return mask
+    group_ids = {obj.vertex_groups[name].index for name in group_names if name in obj.vertex_groups}
+    for v in bm.verts:
+        if not group_ids.isdisjoint(v[deform_layer].keys()): mask[v.index] = True
+    return mask
+
+def cosine_fade_weights(depth, fade_depth):
+    """Return the smoothing weight of every vertex: 1 at and above the cut, cosine ramp down to 0 below it.
+
+    depth is the distance of a vertex below the cutting plane, fade_depth the height over
+    which the smoothing fades out. Fading over the height rather than over topological edge
+    loops keeps the smoothing an even function of the distance from the seam: a single edge
+    loop of the apical mesh wanders up to twelve millimetres in z although the loops are only
+    three and a half millimetres apart.
+    """
+    weights = np.zeros(len(depth))
+    weights[depth <= 0] = 1.0
+    fade = (depth > 0) & (depth < fade_depth)
+    weights[fade] = 0.5 * (1 + np.cos(np.pi * depth[fade] / fade_depth))
+    return weights
+
+def smooth_vertices_weighted(coords, vertex_indices, neighbour_indices, valence, weights, factor, repeat):
+    """Apply weighted umbrella smoothing to the given coordinates.
+
+    Reproduces bpy.ops.mesh.vertices_smooth(factor, repeat) for weight 1 and leaves a
+    vertex untouched for weight 0. Each repetition is computed simultaneously from the
+    coordinates of the previous repetition and averages over all direct neighbours,
+    regardless of their own weight. Vertices without any edge cannot be averaged.
+    """
+    moves = (weights * factor * (valence > 0))[:, None]
+    inverse_valence = np.where(valence > 0, 1.0 / np.maximum(valence, 1), 0.0)[:, None]
+    coords = coords.copy()
+    for _ in range(repeat):
+        neighbour_mean = np.empty_like(coords)
+        for axis in range(3):
+            neighbour_mean[:, axis] = np.bincount(vertex_indices, weights=coords[neighbour_indices, axis], minlength=len(coords))
+        neighbour_mean *= inverse_valence
+        coords += moves * (neighbour_mean - coords)
+    return coords
+
+def taubin_smooth_vertices(coords, vertex_indices, neighbour_indices, valence, weights, factor, repeat):
+    """Apply volume preserving Taubin smoothing to the given coordinates.
+
+    Every repetition is a shrinking umbrella pass followed by an inflating one of the same
+    strength. The two cancel on the low frequencies that carry the volume and damp the high
+    ones that make the surface rough, so the mesh is de-noised instead of collapsing inwards.
+    Plain umbrella smoothing loses a third of the volume in the same number of passes.
+    """
+    for _ in range(repeat):
+        coords = smooth_vertices_weighted(coords, vertex_indices, neighbour_indices, valence, weights, factor, 1)
+        coords = smooth_vertices_weighted(coords, vertex_indices, neighbour_indices, valence, weights, -factor, 1)
+    return coords
+
+def smooth_connection_and_basal_region(context, obj, smoothing_iter_factor):
     """Smooth basal ventricle region excluding the valves"""
     deselect_object_vertices(obj) # Reset node selection.
-    # Select all vertices between the lowest valve vertex and the highest basal region vertex.
     bm = transfer_data_to_mesh(obj)
-    for v in bm.verts: # Select all vertices above highest apical vertex in z-direction.
-        vertex_coords = obj.matrix_world @ v.co 
-        if vertex_coords[2] >= context.scene.remove_basal_threshold: v.select = True 
-    bm.to_mesh(obj.data)
-    bm.free()
-    bpy.ops.object.mode_set(mode='EDIT') 
-    # Select all nodes inside the connection.
-    bpy.ops.object.vertex_group_set_active(group=str("lower_basal_edge_loop"))
-    bpy.ops.object.vertex_group_select()  
-    bpy.ops.object.vertex_group_set_active(group=str("upper_apical_edge_loop"))
-    bpy.ops.object.vertex_group_select()  
-    # Select edge loops below the connection. Selecting all apical nodes would greatly shrink the ventricle volume in that region.   
-    for i in range(context.scene.sm_reps):  # Iteratively smooth the selected nodes. This especially smooths the transition between connection and apical nodes.
-        bpy.ops.mesh.select_more() # Select edge loops until reaching an edgeloop, that was not subdivided during the removal of the basal region.
-        # Exclude valve nodes in the selection process.
-        bpy.ops.object.vertex_group_set_active(group=str("AV"))
-        bpy.ops.object.vertex_group_deselect()
-        bpy.ops.object.vertex_group_set_active(group=str("MV"))
-        bpy.ops.object.vertex_group_deselect()
+    bm.verts.ensure_lookup_table()
+    coords = np.array([v.co[:] for v in bm.verts], dtype=np.float64)
+    # Depth of every vertex below the cutting plane. Everything at or above it, the connection and the basal region, is smoothed fully.
+    world_row_z = np.array(obj.matrix_world)[2] # Third row of the world matrix maps a local coordinate onto its world z-value.
+    depth = context.scene.remove_basal_threshold - (coords @ world_row_z[:3] + world_row_z[3])
+    connection = vertex_group_mask(obj, bm, ("lower_basal_edge_loop", "upper_apical_edge_loop")) # The seam straddles the cut and is always smoothed fully.
+    valves = vertex_group_mask(obj, bm, ("AV", "MV")) # Valve nodes are pinned and must not move at all.
+    vertex_indices, neighbour_indices, valence = build_vertex_neighbourhood(bm)
+    fade_height = depth.max() * context.scene.con_fade_percentage / 100 # The apex is the deepest vertex, so the fade-out is given as a share of the apical height.
+    weights = np.zeros(len(bm.verts))
+    # Smooth the region below the connection as well. Smoothing all apical nodes would greatly shrink the ventricle volume in that region.
+    for i in range(context.scene.sm_reps):  # Iteratively widen the smoothed band. This especially smooths the transition between connection and apical nodes.
+        # A binary selection boundary leaves a heavily smoothed node next to an untouched one, which creates kinks. The strong smoothing of the first iteration therefore fades out over a narrow band, the weaker ones over the full height.
+        weights = cosine_fade_weights(depth, fade_height * (i + 1) / context.scene.sm_reps)
+        weights[connection] = 1
+        weights[valves] = 0
         if i == 0:
             smooth_iter = max(1, round(context.scene.max_con_sm_iter * smoothing_iter_factor) + context.scene.min_con_sm_iter) # Strong smoothing initially.
         else:
-            smooth_iter = round(context.scene.max_con_sm_iter / 5 * smoothing_iter_factor * (context.scene.sm_reps-i)) + context.scene.min_con_sm_iter # Weaker smoothing after first iteration. As hard smoothing creates kinks between smoothed nodes and unsmoothed nodes.
-        bpy.ops.mesh.vertices_smooth(factor=0.5, repeat=smooth_iter)
-    bpy.ops.object.mode_set(mode='OBJECT')
+            smooth_iter = round(context.scene.max_con_sm_iter / 5 * smoothing_iter_factor * (context.scene.sm_reps-i)) + context.scene.min_con_sm_iter # Weaker smoothing after first iteration.
+        coords = smooth_vertices_weighted(coords, vertex_indices, neighbour_indices, valence, weights, 0.5, smooth_iter)
+    # Relax the whole ventricle except the pinned valves. Volume preserving, so the apical data is de-noised rather than shrunk.
+    unpinned = np.ones(len(bm.verts))
+    unpinned[valves] = 0
+    coords = taubin_smooth_vertices(coords, vertex_indices, neighbour_indices, valence, unpinned, 0.5, context.scene.final_sm_iter)
+    for v in bm.verts: # Write back the coordinates and mark every node the connection smoothing has moved.
+        v.co = coords[v.index]
+        v.select = bool(weights[v.index] > 0)
+    bm.select_flush(True)
+    bm.to_mesh(obj.data)
+    bm.free()
 
 class MESH_OT_Ventricle_Sort(bpy.types.Operator): 
     """Sort ventricles by volume starting with ESV"""
@@ -2078,7 +2152,11 @@ class PANEL_Setup_Variables(bpy.types.Panel):
         layout.prop(context.scene, "min_con_sm_iter", text="Minimum smoothing iterations")
         row = layout.row()
         layout.prop(context.scene, "sm_reps", text="Smoothing repetitions")
-      
+        row = layout.row()
+        layout.prop(context.scene, "con_fade_percentage", text="Smoothing fade-out share of apical height")
+        row = layout.row()
+        layout.prop(context.scene, "final_sm_iter", text="Volume preserving smoothing iterations")
+
 class PANEL_Pipeline(bpy.types.Panel):
     bl_label = "Geometric ventricle reconstruction pipeline"
     bl_idname = "PT_Pipeline"
@@ -2331,7 +2409,8 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
         # ------------------------------------------------------------------
         # 4) Export connectivity (faces from ventricles[0]) + per-frame vertices
         # ------------------------------------------------------------------
-        if not write_ventricle_connectivity(ventricles, connectivity_dir, triangulate=False):
+        # Bridging the aortic orifice onto the valve leaves quads, so a reconstructed ventricle is never all triangles.
+        if not write_ventricle_connectivity(ventricles, connectivity_dir, triangulate=True):
             restore_selection()
             return {'CANCELLED'}
 
@@ -3071,6 +3150,8 @@ scene_properties = {
     "max_con_sm_iter": bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min=5),
     "min_con_sm_iter": bpy.props.IntProperty(name="Minimum smoothing iterations for the smoothing of the connection between basal and apical region", default=2, min=0),
     "sm_reps": bpy.props.IntProperty(name="Repitions of reselection and smoothing application when smoothing basal and apical region", default=3, min=0),
+    "con_fade_percentage": bpy.props.FloatProperty(name="Share of the apical height over which the smoothing of the connection fades out below the cut", default=20.0, min=0.1, max=100.0, subtype='PERCENTAGE'),
+    "final_sm_iter": bpy.props.IntProperty(name="Volume preserving smoothing iterations applied to the whole ventricle except the valves", default=10, min=0),
     # Import variables.
     "ventricle_import_dir": bpy.props.StringProperty(name="Import folder", description="Folder to import the ventricle STL dataset", subtype='DIR_PATH', default="//"),
     # Export / CFD pipeline variables.
