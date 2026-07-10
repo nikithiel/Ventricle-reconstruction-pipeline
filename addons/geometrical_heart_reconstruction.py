@@ -910,6 +910,11 @@ class MESH_OT_create_basal(bpy.types.Operator):
         selected_objects = context.selected_objects
         for obj in selected_objects:
             if not mesh_create_basal(context, [obj]): return{'CANCELLED'}
+        for obj in selected_objects:
+            stringname = obj.name + "_basal"
+            basalobj = bpy.data.objects.get(stringname)
+            basalobj.select_set(state=True)
+            obj.select_set(state=False)
         return{'FINISHED'} 
 
 def mesh_create_basal(context, selected_objects):
@@ -920,11 +925,12 @@ def mesh_create_basal(context, selected_objects):
         cons_print(f"Currently does not work :(")
         return False
     #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
-    reference_copy = copy_object(selected_objects[0].name, 'basal_region')
+    newname = selected_objects[0].name + "basal_region"
+    reference_copy = copy_object(selected_objects[0].name, newname)
     # Deselect objects.
     for obj in selected_objects: obj.select_set(False)
     # Operations to create basal region of the ventricle.
-    basal_regions = create_basal_region_for_object(context, reference_copy)
+    basal_regions = create_basal_region_for_object(context, reference_copy, selected_objects[0].name)
     if not basal_regions: 
         cons_print(f"Error during the creation of the basal regions.")
         return False # If an error ocurred during creation of basal region, dont continue.
@@ -933,11 +939,11 @@ def mesh_create_basal(context, selected_objects):
     for obj in selected_objects: obj.select_set(True)
     for basal in basal_regions:  
         basal.select_set(False)
-        basal.hide_set(True)
+        basal.hide_set(False)
     # Remove old basal region objects.
     if context.scene.approach == 5: bpy.data.objects.remove(bpy.data.objects["basal_ref"], do_unlink=True)
-    bpy.data.objects.remove(bpy.data.objects["basal_region"], do_unlink=True)
-    bpy.data.objects.remove(bpy.data.objects["basal_region_poisson"], do_unlink=True)
+    bpy.data.objects.remove(bpy.data.objects[newname], do_unlink=True)
+    bpy.data.objects.remove(bpy.data.objects[newname + "_poisson"], do_unlink=True)
     return basal_regions
 
 def find_reference_ventricle_max(objects): 
@@ -965,7 +971,7 @@ def find_reference_ventricle_mean(objects):
             bpy.types.Scene.reference_object_name = obj.name
     return bpy.types.Scene.reference_object_name
 
-def create_basal_region_for_object(context, reference_copy):
+def create_basal_region_for_object(context, reference_copy, name):
     """Create basal part for a given ventricle"""
     for obj in context.selected_objects: obj.select_set(False) # Deselect all objects.
     # Remove basal region of reference object.
@@ -992,7 +998,7 @@ def create_basal_region_for_object(context, reference_copy):
     # Remove nodes in valve areas, insert of interface nodes and smooth the basal region.
     create_valve_orifice(context, "Aortic")
     create_valve_orifice(context, "Mitral")
-    basal_regions = insert_valves_into_basal(context, poisson_basal) # Create exact inputs for the valve boundaries and connect it with the remaining basal region.
+    basal_regions = insert_valves_into_basal(context, poisson_basal, name) # Create exact inputs for the valve boundaries and connect it with the remaining basal region.
     for basal in basal_regions: basal.select_set(False)
     for basal in basal_regions: smooth_basal_region(context, basal, voxel_size) # Smooth basal region nodes excluding valves and lower edge loop.
     return basal_regions
@@ -1055,7 +1061,7 @@ def remove_apical_region(context, obj):
     bpy.ops.mesh.looptools_relax(input='selected', interpolation='linear', iterations='1', regular=True) # Reduce spikes on the cutting edge loop.
     bpy.ops.mesh.looptools_flatten(influence=100, lock_x=False, lock_y=False, lock_z=False, plane='best_fit', restriction='none')
 
-def insert_valves_into_basal(context, poisson_basal): 
+def insert_valves_into_basal(context, poisson_basal, name): 
     """Insert valve geometry into geometry and connect it to orifice"""
     connect_valve_orifice(context, "Aortic", 0) # Insert aortic valve disk into basal region. 
     poisson_basal.select_set(False)
@@ -1064,7 +1070,7 @@ def insert_valves_into_basal(context, poisson_basal):
     if context.scene.approach == 3 or context.scene.approach == 4: 
         # Copy basal region.
         bpy.ops.object.mode_set(mode='OBJECT')
-        curr_basal = copy_object(poisson_basal.name, f"basal_0")
+        curr_basal = copy_object(poisson_basal.name, name + "_basal")
         curr_basal.select_set(True)
         bpy.context.view_layer.objects.active = curr_basal
         # Connect basal region to valve (Only one basal region necessary for porous medium).
@@ -2511,6 +2517,8 @@ class MESH_OT_object_transform(bpy.types.Operator):
             return False
 
         # ---  Picks a reference object as a basis to be transformed  ---
+
+        bpy.ops.object.mode_set(mode="EDIT")
         max = 0
         for a in selected_objects:
             if len(bmesh.from_edit_mesh(a.data).verts) > max:
@@ -2524,12 +2532,14 @@ class MESH_OT_object_transform(bpy.types.Operator):
         for obj in selected_objects:
             if obj != source:
                 cons_print(f"current object target {obj.name}")
-                copied_source = copy_object(source.name, obj.name + "_transformed_CPD")
-                CPD_transform(copied_source,obj)
-                copied_source.data.update()
-                copied_source_bvh = copy_object(source.name, obj.name + "_transformed_BVH")
+                #copied_source = copy_object(source.name, obj.name + "_transformed")
+                #CPD_transform(copied_source,obj)
+                #copied_source.data.update()
+                copied_source_bvh = copy_object(source.name, obj.name + "_transformed")
                 BvH_transform(copied_source_bvh,obj)
                 copied_source_bvh.data.update()
+                bpy.data.objects.remove(bpy.data.objects[obj.name], do_unlink=True)
+
         cons_print(f"Operation completed")    
         return{"FINISHED"}
 
