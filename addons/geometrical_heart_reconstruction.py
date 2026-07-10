@@ -20,7 +20,7 @@ import open3d as o3d
 import os
 import re
 
-from pycpd import RigidRegistration
+import pycpd
 from mathutils.bvhtree import BVHTree
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -2542,7 +2542,7 @@ def CPD_transform(source,target):
     for v in target.data.vertices:
         target_vert.append(list(v.co[:]))
 
-    reg = RigidRegistration(X=np.asarray(target_vert), Y=np.asarray(source_vert))
+    reg = pycpd.RigidRegistration(X=np.asarray(target_vert), Y=np.asarray(source_vert))
     TY, _ = reg.register()
     for i in range(len(source.data.vertices)):
         source.data.vertices[i].co = mathutils.Vector(TY[i])
