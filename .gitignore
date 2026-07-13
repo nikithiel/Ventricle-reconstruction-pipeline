@@ -185,6 +185,10 @@ Export/
 output/
 Output/
 Connectivity/
+# Ignore everything under dataset/ except the raw/rotated/export template folders.
+/dataset/*
+!/dataset/example/
+!/dataset/raw/rotated/Connectivity/
 
 # Temporary files
 *.tmp
@@ -239,4 +243,3 @@ Temporary Items
 
 # Personal use
 /vol_plot
-/dataset/*
