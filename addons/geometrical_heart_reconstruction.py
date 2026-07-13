@@ -122,6 +122,32 @@ def transfer_data_to_mesh(obj):
     bm.faces.ensure_lookup_table()
     return bm
 
+def triangulate_mesh_object(obj, quad_method, source=""):
+    """Split every non-triangular face of obj into triangles and return how many were split.
+
+    No vertex is added, removed or moved, so vertex indices, vertex groups and the vertex selection
+    all survive. Existing triangles are never handed to the operation, which keeps the valve discs
+    (vertex groups AV and MV) bit-for-bit identical.
+
+    quad_method has no default on purpose: every call states its choice, so a new per-frame site cannot
+    silently inherit BEAUTY and let the frames diverge. 'FIXED' takes the diagonal from the vertex order
+    alone and is mandatory wherever this runs once per ventricle frame, because all frames must keep the
+    same connectivity: the CFD export writes the faces only once, from ventricles[0]. 'BEAUTY' takes the
+    diagonal from the geometry and is only safe on a mesh built once and then copied into every frame.
+    """
+    was_edit = obj.mode == 'EDIT'
+    if was_edit: bpy.ops.object.mode_set(mode='OBJECT')
+    bm = transfer_data_to_mesh(obj)
+    ngons = [f for f in bm.faces if len(f.verts) > 3]
+    if ngons:
+        bmesh.ops.triangulate(bm, faces=ngons, quad_method=quad_method, ngon_method='BEAUTY')
+        bm.to_mesh(obj.data)
+        obj.data.update()
+    bm.free()
+    if was_edit: bpy.ops.object.mode_set(mode='EDIT')
+    if ngons: cons_print(f"{source}: triangulated {len(ngons)} non-triangular face(s) in '{obj.name}'.")
+    return len(ngons)
+
 def get_value(self):
     return "//"
 
@@ -459,6 +485,8 @@ def remove_basal_region(context, obj, del_nodes):
     # Refinement
     refine_upper_apical_edge_loop(vg_orifice)
     smooth_apical_region(obj, vg_orifice)
+    # delete_edgeloop() above merges the neighbouring faces into an n-gon. Runs once per frame, so FIXED.
+    triangulate_mesh_object(obj, quad_method='FIXED', source="remove_basal_region")
     # Close function.
     obj.select_set(False)
     return del_nodes
@@ -498,6 +526,8 @@ def subdivide_last_edge_loop(obj, vg_orifice):
     bpy.ops.mesh.select_less()
     bpy.ops.mesh.select_less()
     bpy.ops.object.mode_set(mode='OBJECT')
+    # subdivide(ngon=False) yields quads as soon as the apical mesh carries one. Runs once per frame, so FIXED.
+    triangulate_mesh_object(obj, quad_method='FIXED', source="subdivide_last_edge_loop")
     # Re-initialize vertex group for upper apical edge loop.
     bpy.ops.object.mode_set(mode='OBJECT')
     bm = transfer_data_to_mesh(obj)
@@ -752,6 +782,10 @@ def create_valve_orifice(context, valve_mode):
     # Remove troubling vertices(vertices with 2 neighbours) in (currently selected) orifice vertex group and smooth this edge loop.
     smooth_relax_edgeloop(obj, vg_orifice) 
     bpy.ops.object.mode_set(mode='OBJECT')
+    # dissolve_verts() above always merges the dissolved region into an n-gon. Only the one closest to the
+    # valve centre is deleted, so a second one survives whenever that region falls apart. Triangulate after
+    # smooth_relax_edgeloop(), which deletes vertices with two neighbours and would otherwise see a different valence.
+    triangulate_mesh_object(obj, quad_method='BEAUTY', source="create_valve_orifice")
     return True
 
 def select_valve_vertices(context, valve_mode):
@@ -833,6 +867,7 @@ def connect_valve_orifice(context, valve_mode, valve_index):
     build_valve_surface(context, obj, valve_mode = valve_mode, ratio = 1, valve_index = valve_index) # Create interface valve nodes.
     bpy.ops.object.mode_set(mode='EDIT') # Change selection mode in edit mode for brige loop operator.
     bpy.ops.mesh.bridge_edge_loops()
+    bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY') # Bridging leaves quads. Only the bridge ring is selected, so the valve disc stays untouched.
     bpy.ops.object.mode_set(mode='OBJECT')
     bpy.context.tool_settings.mesh_select_mode = (True, False, False)
 
@@ -1115,6 +1150,8 @@ def remove_apical_region(context, obj):
     # Relax and flatten lower edge loop.   
     bpy.ops.mesh.looptools_relax(input='selected', interpolation='linear', iterations='1', regular=True) # Reduce spikes on the cutting edge loop.
     bpy.ops.mesh.looptools_flatten(influence=100, lock_x=False, lock_y=False, lock_z=False, plane='best_fit', restriction='none')
+    # delete_edgeloop() above merges the neighbouring faces into an n-gon. Built once for all frames, so BEAUTY.
+    triangulate_mesh_object(obj, quad_method='BEAUTY', source="remove_apical_region")
 
 def insert_valves_into_basal(context, poisson_basal): 
     """Insert valve geometry into geometry and connect it to orifice"""
@@ -1314,6 +1351,9 @@ def combine_apical_and_basal_region(context, basal_regions, reference, selected_
         bpy.ops.mesh.select_all(action='SELECT')
         bpy.ops.mesh.edge_face_add()
         bpy.ops.object.mode_set(mode='OBJECT')
+        # edge_face_add() fills every face-less edge cycle in the whole mesh, so a cycle with more than
+        # three edges becomes an n-gon. Runs once per frame, so FIXED.
+        triangulate_mesh_object(obj, quad_method='FIXED', source="combine_apical_and_basal_region")
         # Smooth connection dependent on which geometry is smoothed.
         smoothing_iter_factor = compute_smoothing_iteration_factor_connection(context, counter, volumelist)
         smooth_connection_and_basal_region(context, obj, smoothing_iter_factor)
@@ -1673,14 +1713,16 @@ def add_atrium(context):
     atrium.select_set(True)
     bpy.context.view_layer.objects.active = atrium
     scale_rotate_translate_object(context, atrium, "Mitral", ratio=1)
+    triangulate_mesh_object(atrium, quad_method='BEAUTY', source="add_atrium") # A5_Atrium ships one quad; A3/A4 are already triangles.
     return atrium
-   
+
 def add_aorta(context):
     """Copy aorta and place it above the aortic valve as a separate object"""
     aorta = copy_object(f"A{context.scene.approach}_Aorta", "aorta")
     aorta.select_set(True)
     bpy.context.view_layer.objects.active = aorta
     scale_rotate_translate_object(context, aorta, "Aortic", ratio=1)
+    triangulate_mesh_object(aorta, quad_method='BEAUTY', source="add_aorta") # A5_Aorta ships 64 quads; A3/A4 are already triangles.
     return aorta
 
 def create_porous_valve_zones(context, valve_mode, valve_strings):
@@ -1700,6 +1742,47 @@ def create_porous_valve_zones(context, valve_mode, valve_strings):
         new_obj.select_set(True)
         bpy.context.view_layer.objects.active = new_obj
         scale_rotate_translate_object(context, new_obj, valve_mode = valve_mode, ratio = 1)
+        triangulate_mesh_object(new_obj, quad_method='BEAUTY', source="create_porous_valve_zones") # Guard against a template carrying n-gons.
+
+# Objects shipped in GVR-Pipeline.blend. They are pipeline input, not pipeline output, so the guard
+# below skips them. A*_AV_Hull carries 1152 quads on purpose: select_valve_vertices() copies it only
+# to run is_inside() against and deletes the copy again, so triangulating it would move the
+# closest_point_on_mesh() surface and change which vertices the valve orifice removes.
+TEMPLATE_PREFIXES = ("A3_", "A4_", "A5_")
+
+def face_vertex_group_names(obj, poly):
+    """Names of every vertex group the corners of poly belong to"""
+    return sorted({obj.vertex_groups[g.group].name for vi in poly.vertices for g in obj.data.vertices[vi].groups})
+
+def mesh_face_signature(obj):
+    """Fingerprint of an object's face topology, independent of face and corner order"""
+    return tuple(sorted(tuple(sorted(poly.vertices)) for poly in obj.data.polygons))
+
+def check_pipeline_triangulated(context, ventricles):
+    """Return an error message if the reconstruction left a non-triangular face, or if the ventricle
+    frames no longer share one topology. Return None when everything is in order.
+
+    The frame check is not redundant: quad_method='FIXED' keeps quads deterministic across frames, but
+    an n-gon falls back to ngon_method, and both 'BEAUTY' and 'EAR_CLIP' split it by geometry. The CFD
+    export writes the connectivity once, from ventricles[0], and only the coordinates per frame, so
+    frames that disagree on topology would be written out silently wrong.
+    """
+    for obj in bpy.data.objects:
+        if obj.type != 'MESH' or obj.name.startswith(TEMPLATE_PREFIXES): continue
+        for poly in obj.data.polygons:
+            if len(poly.vertices) != 3:
+                groups = ", ".join(face_vertex_group_names(obj, poly)) or "none"
+                return (f"Quick reconstruction: non-triangular face {poly.index} in '{obj.name}' with "
+                        f"{len(poly.vertices)} corners (vertex groups: {groups}).")
+    if len(ventricles) > 1:
+        vertex_counts = sorted({len(obj.data.vertices) for obj in ventricles})
+        if len(vertex_counts) != 1:
+            return (f"Quick reconstruction: ventricle frames disagree on vertex count {vertex_counts}. "
+                    f"The CFD export needs one shared topology across all frames.")
+        if len({mesh_face_signature(obj) for obj in ventricles}) != 1:
+            return (f"Quick reconstruction: ventricle frames disagree on face topology. "
+                    f"The CFD export needs one shared topology across all frames.")
+    return None
 
 class MESH_OT_Quick_Recon(bpy.types.Operator):
     """Quick geometrical reconstruction of all ventricles containing all steps of the reconstruction algorithm in one execution"""
@@ -1708,10 +1791,19 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
     def execute(self, context):
         if context.scene.approach == 5:
             if not interpolate_ventricle(context): return{'CANCELLED'} # Interpolate ventricle geometry.
+        # Remember the ventricles by name: mesh_connect_apical_and_basal() clears the selection, and the
+        # guard below still needs to compare all frames against each other.
+        ventricle_names = [obj.name for obj in find_ventricle_objects(context.selected_objects)]
         remove_multiple_basal_region(context) # Remove old basal region.
         if not mesh_create_basal(context): return{'CANCELLED'}# Operations to create basal region of the ventricle containing valve orifices.
         if not mesh_connect_apical_and_basal(context): return {'CANCELLED'} # Connect apical regions with corresponding bassal regions.
         add_vessels_and_valves(context) # Add surrounding objects including aorta, atrium and valves.
+        ventricles = [bpy.data.objects[name] for name in ventricle_names if name in bpy.data.objects]
+        error = check_pipeline_triangulated(context, ventricles)
+        if error:
+            cons_print(error)
+            self.report({'ERROR'}, error)
+            return {'CANCELLED'}
         return{'FINISHED'} 
 
 def cleanup_basal_region(context):
@@ -2409,8 +2501,10 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
         # ------------------------------------------------------------------
         # 4) Export connectivity (faces from ventricles[0]) + per-frame vertices
         # ------------------------------------------------------------------
-        # Bridging the aortic orifice onto the valve leaves quads, so a reconstructed ventricle is never all triangles.
-        if not write_ventricle_connectivity(ventricles, connectivity_dir, triangulate=True):
+        # Every face-creating step of the reconstruction triangulates right away, so a reconstructed
+        # ventricle is all triangles. Validate instead of silently repairing: a quad here means the mesh
+        # never went through quick_recon, or a new face-creating step was left unguarded.
+        if not write_ventricle_connectivity(ventricles, connectivity_dir, triangulate=False):
             restore_selection()
             return {'CANCELLED'}
 
