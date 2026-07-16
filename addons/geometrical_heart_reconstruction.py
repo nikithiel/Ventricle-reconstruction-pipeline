@@ -1187,6 +1187,27 @@ class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
         if not mesh_connect_apical_and_basal_pairs(context): return {'CANCELLED'}
         return {'FINISHED'} 
 
+def select_lower_regions(region):
+    name = region.name
+    if not name in bpy.data.objects: # Check if all necessary basal regions are present.
+        cons_print(f"Missing following basal region: {name}")
+        return False       
+    else:  
+        curr_basal = bpy.data.objects[name]
+        # Unhide current basal region and use it as active object.
+        curr_basal.hide_set(False)
+        curr_basal.select_set(True)
+        bpy.context.view_layer.objects.active = curr_basal
+        # Select only lower basal edge loop vertex group.
+        deselect_object_vertices(curr_basal)
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.object.vertex_group_set_active(group=str("lower_basal_edge_loop"))
+        bpy.ops.object.vertex_group_select()
+        bpy.ops.object.mode_set(mode='OBJECT')
+        # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
+        curr_basal.select_set(False)
+        #curr_basal.hide_set(True)
+
 def mesh_connect_apical_and_basal_pairs(context):
     """Connect apical and basal region of the ventricle pairs"""
     # Here there should only be basal regions that are selected. 
@@ -1194,19 +1215,22 @@ def mesh_connect_apical_and_basal_pairs(context):
 
     # Checks if every basal region has a pair (file with the same name except no _basal at the end)
     for obj in selected_objects:
-        if bpy.data.objects.get(obj.name[:11]) is None :
+        if bpy.data.objects.get(obj.name[:-6]) is None :
             cons_print(f"No matching ventricle found")
             return None
+    
+    basal_region_names = [obj.name for obj in selected_objects]
 
-    for obj in selected_objects:
+    for name in basal_region_names:
+        cons_print(f"Connecting {name}")
+        obj = bpy.data.objects.get(name)
+        cons_print(f"{obj}")
+        #obj.select_set(state=True)
         # Select only lower basal edge loop vertex group.
-        deselect_object_vertices(obj)
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.object.vertex_group_set_active(group=str("lower_basal_edge_loop"))
-        bpy.ops.object.vertex_group_select()
-        #bpy.ops.object.mode_set(mode='OBJECT')
+        select_lower_regions(obj)
 
-        #combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
+        # Combine matching apical and basal region
+        combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
 
     return {"FINISHED"}
 
@@ -1215,9 +1239,12 @@ def mesh_connect_apical_and_basal(context):
     cons_print("Connecting apical and basal regions...")
     selected_objects = context.selected_objects
     # Initialize names for basal regions.
-    if context.scene.approach == 5: names = ["basal_0", "basal_1", "basal_2", "basal_3", "basal_4"]
-    else: names = ["basal_0"]
+    names = []
+    for obj in selected_objects:
+        names.append(obj.name)
     basal_regions = []
+
+    cons_print(names)
     # Set up basal regions so that the lower edge loop is selected.
     for name in names:
         if not name in bpy.data.objects: # Check if all necessary basal regions are present.
@@ -1240,6 +1267,7 @@ def mesh_connect_apical_and_basal(context):
             curr_basal.select_set(False)
             curr_basal.hide_set(True)
     # Create initial connection using a reference copy.
+    cons_print(basal_regions)
     reference = copy_object(bpy.types.Scene.reference_object_name, "reference")
     if not combine_apical_and_basal_region(context, basal_regions, reference, selected_objects): return False
     cleanup_basal_region(context) # Cleanup: Delete basal regions.
@@ -1248,11 +1276,12 @@ def mesh_connect_apical_and_basal(context):
 def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
     ## Apply connecting operation for reference and save connecting edges used in the connection.
-    prepare_geometry_for_bridging(ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
-    edge_indices_bridge = bridge_edges_reference(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
+    prepare_geometry_for_bridging_pairs(ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
+    edge_indices_bridge = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
     inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
     edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
-    bpy.data.objects.remove(ventricle, do_unlink=True) # Cleanup: Remove reference object.
+    bpy.data.objects.remove(basal, do_unlink=True) # Cleanup: Remove reference object.
+    """
     # Compute the frame of the end diastole. Necessary for interpolated mitral valve.
     frame_EDV = round(context.scene.time_diastole / context.scene.time_rr *  context.scene.frames_ventricle) 
     # Compute volume list for computation of the intensity of smoothing of the connection between basal and apical region.
@@ -1281,12 +1310,14 @@ def combine_apical_and_basal_region_pairs(context, basal, ventricle):
         smoothing_iter_factor = compute_smoothing_iteration_factor_connection(context, counter, volumelist)
         smooth_connection_and_basal_region(context, obj, smoothing_iter_factor)
         obj.hide_set(True) 
-    #for obj in selected_objects: obj.hide_set(False) # Cleanup: Unhide objects.
+    #for obj in selected_objects: obj.hide_set(False) # Cleanup: Unhide objects."""
     return True
 
 def combine_apical_and_basal_region(context, basal_regions, reference, selected_objects):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
     # Deselect (and hide) all objects.
+    cons_print(ventricle)
+    cons_print(basal_regions)
     for obj in selected_objects: 
         obj.select_set(False)  
         obj.hide_set(True)
@@ -1344,35 +1375,30 @@ def get_valve_state_index(context, counter, frame_EDV):
     if counter in frames_mv_4: return 4
     else: return 0
 
-def prepare_geometry_for_bridging(obj, final_basal_region):
-    """Prepare the individual ventricle geometries for the bridging process. The original basal region is removed and the remaining apical region is joined into one object with the reconstructed basal region"""
-    current_basal = copy_object(final_basal_region.name, 'temp') # Copy basal region for current object.
-    # Change selection such that the copy of the basal region is merged into the input-object (obj).
+def prepare_geometry_for_bridging_pairs(vent, basal):
+    current_basal = copy_object(basal.name, 'temp')
     current_basal.select_set(False)
-    obj.hide_set(False)
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
-    deselect_object_vertices(obj)
-    # Cut basal part of the ventricle.
-    for group in obj.vertex_groups:
+    vent.hide_set(False)
+    vent.select_set(True)
+    bpy.context.view_layer.objects.active = vent
+    deselect_object_vertices(vent)
+
+    for group in vent.vertex_groups:
         if group.name == "upper_apical_edge_loop":
             vg_orifice = group
             break
-    subdivide_last_edge_loop(obj, vg_orifice) # Apply subdivide to smooth out further connection. 
-    # Combine both geometries.
+    subdivide_last_edge_loop(vent, vg_orifice)
     current_basal.select_set(True)
     bpy.ops.object.join()
 
-def bridge_edges_reference(context, reference):
-    """Connect basal with apical part of the reference ventricle"""
-    bpy.ops.object.mode_set(mode='EDIT') # Need to switch to edit mode. 
-    selected_edges_before_indices, selected_edges_before_verts = get_selected_edges(reference) # Collect edge indices before operation.
-    # Connect apical and basal region.
+def bridge_edges_reference_pairs(context, basal):
+    bpy.ops.object.mode_set(mode='EDIT')
+    selected_edges_before_indices, selected_edges_before_verts = get_selected_edges(basal) # Collect edge indices before operation. 
+
     bpy.context.tool_settings.mesh_select_mode = (False, True, False) # Activate edge mode in edit mode.
     bpy.ops.mesh.looptools_bridge(cubic_strength=1, interpolation='linear', loft=False, loft_loop=False, min_width=100, mode='shortest', remove_faces=False, reverse=False, segments=1, twist=context.scene.connection_twist) # Command used to connect two edge loops.
     bpy.context.tool_settings.mesh_select_mode = (True, False, False) # Return to vertex mode in edit mode.
-    selected_edges_after_indices, selected_edges_after_verts = get_selected_edges(reference) # Save edge indices after operation.
-    # Compare edges before and after operation and only keep the deviating edges and save their vertex indices in a list.
+    selected_edges_after_indices, selected_edges_after_verts = get_selected_edges(basal) # Save edge indices after operation.
     new_edges, new_edges_vert_indices = ([] for i in range(2))
     for counter, e in enumerate(selected_edges_after_indices):
         if e not in selected_edges_before_indices:
@@ -1406,7 +1432,7 @@ def inset_faces_smooth(context):
         inset_thickness = distance / (4 * 2**(counter)) # Reduce the offset between newly added edge_loops by the factor 4.
         bpy.ops.mesh.inset(thickness= inset_thickness, use_even_offset=False, depth=0, use_select_inset=True) # Insert faces along the bridge between apical and basal.
         bpy.ops.mesh.vertices_smooth(factor=0.5, repeat= 1 + counter)  # Smooth connection between apical and basal region including the newly added faces.
-    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.ops.object.mode_set(mode='EDIT')
   
 def triangulate_connection(bool_ref, obj, ref_edge_indices):
     """Triangulate connection between apical and basal region"""
