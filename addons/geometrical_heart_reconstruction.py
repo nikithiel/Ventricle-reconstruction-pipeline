@@ -1206,7 +1206,7 @@ def select_lower_regions(region):
         bpy.ops.object.mode_set(mode='OBJECT')
         # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
         curr_basal.select_set(False)
-        curr_basal.hide_set(True)
+        #curr_basal.hide_set(True)
 
 def mesh_connect_apical_and_basal_pairs(context):
     """Connect apical and basal region of the ventricle pairs"""
@@ -1220,24 +1220,24 @@ def mesh_connect_apical_and_basal_pairs(context):
             return None
     
     basal_region_names = [obj.name for obj in selected_objects]
-    basal_region_names_copy = basal_region_names.copy()
 
     for name in basal_region_names:
+        for obj in context.selected_objects:
+            obj.select_set(False)
         cons_print(f"Connecting {name}")
         obj = bpy.data.objects.get(name)
         # Select only lower basal edge loop vertex group.
         select_lower_regions(obj)
 
         # Combine matching apical and basal region
-        combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]), basal_region_names_copy)
-        basal_region_names_copy.remove(name)
+        combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
 
     return {"FINISHED"}
 
-def combine_apical_and_basal_region_pairs(context, basal, ventricle, basal_region_names):
+def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
     ## Apply connecting operation for reference and save connecting edges used in the connection.
-    prepare_geometry_for_bridging_pairs(context, basal_region_names, ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
+    prepare_geometry_for_bridging_pairs(context, ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
     edge_indices_bridge = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
     inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
     edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
@@ -1289,7 +1289,7 @@ def get_valve_state_index(context, counter, frame_EDV):
     if counter in frames_mv_4: return 4
     else: return 0
 
-def prepare_geometry_for_bridging_pairs(context, basal_region_names, vent, basal):
+def prepare_geometry_for_bridging_pairs(context, vent, basal):
     temp_name = basal.name + '_temp'
     current_basal = copy_object(basal.name, temp_name)
     current_basal.select_set(False)
