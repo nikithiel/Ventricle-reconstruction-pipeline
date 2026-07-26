@@ -2052,7 +2052,7 @@ class PANEL_Pipeline(bpy.types.Panel):
         layout.operator('heart.create_basal', text= "Create basal region", icon = 'SPHERECURVE')
         # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
         row = layout.row()
-        layout.operator('heart.object_transform', text = "Transform Objects", icon = "SHAPEKEY_DATA")
+        layout.operator('heart.object_transform', text = "Morph Topology", icon = "SHAPEKEY_DATA")
         
         row = layout.row()
         layout.operator('heart.connect_apical_and_basal', text= "Connect basal and apical regions", icon = 'ORPHAN_DATA')
@@ -2504,7 +2504,7 @@ def export_object_to_stl(obj, filepath, depsgraph=None):
     eval_obj.to_mesh_clear()
 
 class MESH_OT_object_transform(bpy.types.Operator):
-    """Reshape mesh object to preserve mesh connetivity and topology between objects. Currently uses the object with max mesh count as reference (WIP)"""
+    """Reshape mesh object to preserve mesh connetivity and topology between objects. Currently uses the object with max mesh count as reference"""
     bl_idname = 'heart.object_transform'
     bl_label = 'Object Transformation'
     def execute(self,context):
