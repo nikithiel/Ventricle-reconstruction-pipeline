@@ -902,20 +902,23 @@ def build_valve_surface(context, obj, valve_mode, ratio, valve_index):
 
 class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
-    bl_label = 'Create basal region of ventricle using the position and angles of the heart valves.'
+    bl_label = 'Create basal regions of ventricles using the position and angles of the heart valves.'
     def execute(self, context):
-        if not context.selected_objects:
+        mesh_create_basal_batch(context)
+        return{'FINISHED'} 
+
+def mesh_create_basal_batch(context):
+    if not context.selected_objects:
             cons_print("No elements selected.")
             return False
-        selected_objects = context.selected_objects
-        for obj in selected_objects:
-            if not mesh_create_basal(context, [obj]): return{'CANCELLED'}
-        for obj in selected_objects:
-            stringname = obj.name + "_basal"
-            basalobj = bpy.data.objects.get(stringname)
-            basalobj.select_set(state=True)
-            obj.select_set(state=False)
-        return{'FINISHED'} 
+    selected_objects = context.selected_objects
+    for obj in selected_objects:
+        if not mesh_create_basal(context, [obj]): return{'CANCELLED'}
+    for obj in selected_objects:
+        stringname = obj.name + "_basal"
+        basalobj = bpy.data.objects.get(stringname)
+        basalobj.select_set(state=True)
+        obj.select_set(state=False)
 
 def mesh_create_basal(context, selected_objects):
     """Create Basal Regions for each of the selected objects"""
@@ -1566,8 +1569,9 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
         if context.scene.approach == 5:
             if not interpolate_ventricle(context): return{'CANCELLED'} # Interpolate ventricle geometry.
         remove_multiple_basal_region(context) # Remove old basal region.
-        if not mesh_create_basal(context): return{'CANCELLED'}# Operations to create basal region of the ventricle containing valve orifices.
-        if not mesh_connect_apical_and_basal(context): return {'CANCELLED'} # Connect apical regions with corresponding bassal regions.
+        if not mesh_create_basal_batch(context): return{'CANCELLED'}# Operations to create basal region of the ventricle containing valve orifices.
+        if not morph_topology(context): return{'CANCELLED'} # Morph the topology of all the generated basal regions to match
+        if not mesh_connect_apical_and_basal_pairs(context): return {'CANCELLED'} # Connect apical regions with corresponding bassal regions.
         add_vessels_and_valves(context) # Add surrounding objects including aorta, atrium and valves.
         return{'FINISHED'} 
 
@@ -2041,6 +2045,10 @@ class PANEL_Pipeline(bpy.types.Panel):
         row.operator('heart.remove_basal', text= "Remove basal region", icon = 'LIBRARY_DATA_OVERRIDE')  
         row = layout.row()
         layout.operator('heart.create_basal', text= "Create basal region", icon = 'SPHERECURVE')
+        # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
+        row = layout.row()
+        layout.operator('heart.object_transform', text = "Transform Objects", icon = "SHAPEKEY_DATA")
+        
         row = layout.row()
         layout.operator('heart.connect_apical_and_basal', text= "Connect basal and apical regions", icon = 'ORPHAN_DATA')
         row = layout.row()
@@ -2078,9 +2086,6 @@ class PANEL_Dev_tools(bpy.types.Panel):
         row = layout.row(align=True)
         row.operator('heart.plot_stl', text = "Show", icon = 'AXIS_FRONT')
         row.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
-        # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
-        row = layout.row(align=True)
-        row.operator('heart.object_transform', text = "Transform Objects", icon = "SHAPEKEY_DATA")
 
 #------
 
@@ -2498,43 +2503,49 @@ class MESH_OT_object_transform(bpy.types.Operator):
     bl_idname = 'heart.object_transform'
     bl_label = 'Object Transformation'
     def execute(self,context):
-        scene = context.scene
-        view_layer = context.view_layer
-
-        # --- Remember original selection & active object, also which meshes were selected ---
-        selected_objects = context.selected_objects
-        
-        if len(selected_objects) == 0 or not selected_objects:
-            cons_print(f"No objects selected")
-            return False
-
-        # ---  Picks a reference object as a basis to be transformed  ---
-
-        bpy.ops.object.mode_set(mode="EDIT")
-        max = 0
-        for a in selected_objects:
-            if len(bmesh.from_edit_mesh(a.data).verts) > max:
-                source = a
-                max = len(bmesh.from_edit_mesh(a.data).verts)
-        
-        cons_print(f"Object used as reference {source.name}")
-        
-        bpy.ops.object.mode_set(mode='OBJECT') 
-        
-        for obj in selected_objects:
-            if obj != source:
-                cons_print(f"current object target {obj.name}")
-                #copied_source = copy_object(source.name, obj.name + "_transformed")
-                #CPD_transform(copied_source,obj)
-                #copied_source.data.update()
-                copied_source_bvh = copy_object(source.name, obj.name + "_transformed")
-                BvH_transform(copied_source_bvh,obj)
-                copied_source_bvh.data.update()
-                bpy.data.objects.remove(bpy.data.objects[obj.name], do_unlink=True)
-
-        cons_print(f"Operation completed")    
+        if not morph_topology(context): return{"CANCELLED"}
         return{"FINISHED"}
 
+def morph_topology(context):
+    scene = context.scene
+    view_layer = context.view_layer
+
+    # --- Remember original selection & active object, also which meshes were selected ---
+    selected_objects = context.selected_objects
+    
+    if len(selected_objects) == 0 or not selected_objects:
+        cons_print(f"No objects selected")
+        return False
+
+    # ---  Picks a reference object as a basis to be transformed  ---
+
+    bpy.ops.object.mode_set(mode="EDIT")
+    max = 0
+    for a in selected_objects:
+        if len(bmesh.from_edit_mesh(a.data).verts) > max:
+            source = a
+            max = len(bmesh.from_edit_mesh(a.data).verts)
+    
+    cons_print(f"Object used as reference {source.name}")
+    
+    bpy.ops.object.mode_set(mode='OBJECT') 
+    
+    for obj in selected_objects:
+        if obj != source:
+            cons_print(f"current object target {obj.name}")
+            #copied_source = copy_object(source.name, obj.name + "_transformed")
+            #CPD_transform(copied_source,obj)
+            #copied_source.data.update()
+            copied_source_bvh = copy_object(source.name, obj.name + "_transformed")
+            BvH_transform(copied_source_bvh,obj)
+            copied_source_bvh.data.update()
+            copied_source_bvh.select_set(True)
+            # Remove old objects
+            bpy.data.objects.remove(bpy.data.objects[obj.name], do_unlink=True)
+            copied_source_bvh.name = copied_source_bvh.name[:-12]
+
+    cons_print(f"Operation completed") 
+    
 def CPD_transform(source,target):
     source_vert = []
     for v in source.data.vertices:
