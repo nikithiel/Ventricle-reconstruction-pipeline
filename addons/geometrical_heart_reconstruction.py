@@ -919,6 +919,7 @@ def mesh_create_basal_batch(context):
         basalobj = bpy.data.objects.get(stringname)
         basalobj.select_set(state=True)
         obj.select_set(state=False)
+    return True
 
 def mesh_create_basal(context, selected_objects):
     """Create Basal Regions for each of the selected objects"""
@@ -1235,7 +1236,7 @@ def mesh_connect_apical_and_basal_pairs(context):
         # Combine matching apical and basal region
         combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
 
-    return {"FINISHED"}
+    return True
 
 def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
@@ -1566,12 +1567,16 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
     bl_idname = 'heart.quick_recon'
     bl_label = 'Quick geometrical reconstruction of all ventricles containing all steps of the reconstruction algorithm in one execution.'
     def execute(self, context):
-        if context.scene.approach == 5:
-            if not interpolate_ventricle(context): return{'CANCELLED'} # Interpolate ventricle geometry.
         remove_multiple_basal_region(context) # Remove old basal region.
-        if not mesh_create_basal_batch(context): return{'CANCELLED'}# Operations to create basal region of the ventricle containing valve orifices.
-        if not morph_topology(context): return{'CANCELLED'} # Morph the topology of all the generated basal regions to match
-        if not mesh_connect_apical_and_basal_pairs(context): return {'CANCELLED'} # Connect apical regions with corresponding bassal regions.
+        if not mesh_create_basal_batch(context): 
+            print("Not working or not returning")
+            return{'CANCELLED'}# Operations to create basal region of the ventricle containing valve orifices.
+        if not morph_topology(context): 
+            print("Morph topology not working")
+            return{'CANCELLED'} # Morph the topology of all the generated basal regions to match
+        if not mesh_connect_apical_and_basal_pairs(context): 
+            print("Something went wrong here")
+            return {'CANCELLED'} # Connect apical regions with corresponding bassal regions.
         add_vessels_and_valves(context) # Add surrounding objects including aorta, atrium and valves.
         return{'FINISHED'} 
 
@@ -2544,7 +2549,8 @@ def morph_topology(context):
             bpy.data.objects.remove(bpy.data.objects[obj.name], do_unlink=True)
             copied_source_bvh.name = copied_source_bvh.name[:-12]
 
-    cons_print(f"Operation completed") 
+    cons_print(f"Operation completed")
+    return True
     
 def CPD_transform(source,target):
     source_vert = []
