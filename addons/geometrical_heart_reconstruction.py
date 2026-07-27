@@ -901,6 +901,7 @@ def build_valve_surface(context, obj, valve_mode, ratio, valve_index):
     bpy.ops.object.mode_set(mode='OBJECT') 
 
 class MESH_OT_create_basal(bpy.types.Operator):
+    """ Create a basal region equivalent for every frame of ventricles selected"""
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal regions of ventricles using the position and angles of the heart valves.'
     def execute(self, context):
@@ -1192,6 +1193,7 @@ class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
         return {'FINISHED'} 
 
 def select_lower_regions(region):
+    """ Selects the lowest mesh of the basal region"""
     name = region.name
     if not name in bpy.data.objects: # Check if all necessary basal regions are present.
         cons_print(f"Missing following basal region: {name}")
@@ -1210,7 +1212,7 @@ def select_lower_regions(region):
         bpy.ops.object.mode_set(mode='OBJECT')
         # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
         curr_basal.select_set(False)
-        #curr_basal.hide_set(True)
+        curr_basal.hide_set(True)
 
 def mesh_connect_apical_and_basal_pairs(context):
     """Connect apical and basal region of the ventricle pairs"""
@@ -2052,7 +2054,7 @@ class PANEL_Pipeline(bpy.types.Panel):
         layout.operator('heart.create_basal', text= "Create basal region", icon = 'SPHERECURVE')
         # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
         row = layout.row()
-        layout.operator('heart.object_transform', text = "Morph Topology", icon = "SHAPEKEY_DATA")
+        layout.operator('heart.object_transform', text = "Morph Topology", icon = "TRANSFORM_ORIGINS")
         
         row = layout.row()
         layout.operator('heart.connect_apical_and_basal', text= "Connect basal and apical regions", icon = 'ORPHAN_DATA')
