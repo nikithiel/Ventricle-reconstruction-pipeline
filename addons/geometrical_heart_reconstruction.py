@@ -2054,7 +2054,7 @@ class PANEL_Pipeline(bpy.types.Panel):
         layout.operator('heart.create_basal', text= "Create basal region", icon = 'SPHERECURVE')
         # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
         row = layout.row()
-        layout.operator('heart.object_transform', text = "Morph Topology", icon = "TRANSFORM_ORIGINS")
+        layout.operator('heart.object_transform', text = "Morph topology", icon = "TRANSFORM_ORIGINS")
         
         row = layout.row()
         layout.operator('heart.connect_apical_and_basal', text= "Connect basal and apical regions", icon = 'ORPHAN_DATA')

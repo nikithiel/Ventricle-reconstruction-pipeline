@@ -122,22 +122,37 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     \
     Change the valve modeling approach.
 ## Run pipeline
-Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline' or do the following steps for a more comprehensive execution of the pipeline:\
+Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline', which simply just runs all the previous steps automaticall or do the following steps for a more comprehensive execution of the pipeline:\
 ![Image of the setup pipeline](/readme_images/Pipeline_optional.png)
 1. Remove basal region\
     1.1. Press button 'Remove basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
     This removes all vertices above the z-value for a reference ventricle. The vertices of the other ventricle object with identical indices to the deleted one in the reference are also deleted. The upper edge loop is smoothed such that all its vertices lay on the same xy-plane. Lastly the ventricle objects are shifted along the z-axis such that all xy-planes match with the reference ventricle xy-plane.
+
 2. Create basal region\
-    2.1. Press button 'Create basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
+    2.1. Select all the ventricles, for which basal regions are to be generated for\
+    2.2. Press button 'Create basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
-    This creates a reference basal region used the selected object. For that first the valve indices and a support structure are added to a copy of the reference ventricle. Then the Poisson surface reconstruction is applied to the vertices to create a surface object from all vertices. After that the object is remeshed and the apical region is removed while smoothing the lower edge loop of the resulting basal region. If multiple objects are selected, then a basal region will be created for each of the selected object, however, these basal regions will most likely not share the same topology. The button "Mesh Transformation" is required to remesh the objects to share the same topology.
-3. Connect basal and apical parts\
-    3.1. Press button 'Connect basal and apical regions' in the panel 'Geometric ventricle reconstruction pipeline'\
+    This creates a reference basal region used the selected objects. For that first the valve indices and a support structure are added to a copy of the reference ventricle. Then the Poisson surface reconstruction is applied to the vertices to create a surface object from all vertices. After that the object is remeshed and the apical region is removed while smoothing the lower edge loop of the resulting basal region. If multiple objects are selected, then a basal region will be created for each of the selected object, however, these basal regions will most likely not share the same topology. 
+    The generated basal region will automatically be selected.
+    The button "Morph Topology" is required to remesh the objects to share the same topology.
+
+3. Morph Topology\
+    3.1 Select all the basal regions to be morphed\
+    3.2 Press button 'Morph Topology' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
-    This creates a copy of the reference basal region for all apical region ventricle objects and connects them with the looptools_bridge function from the Blender addon Looptools. Since this connection creates long quadrangular faces, the faces need to be split using an integrated insetting algorithm leading to faces where the deviation of edge lengths are reduced. After that the faces are triangulated and iteratively smoothed. These processes are done for the reference ventricle object first and then copied to the other ventricles to remain node-connectivity.
-4. Add atrium, aorta and valves\
-    4.1. Press button 'Add atrium, aorta and valves' in the panel 'Geometric ventricle reconstruction pipeline'\
+    This first selects the basal object with the highest mesh count as the "reference" object. Then for each of the other object, a copy of the reference object is created, then transformed until different methods into the target object. The resulting object would then share topology with the "reference" object, but would be in the shape of the target object. The old object (the target with mismatching topology) is then deleted.
+    As result, the basal regions generated will automatically be selected for the next step.
+
+4. Connect basal and apical parts\
+    4.1 Select the basal regions to be connected with its' matching ventricle\
+    4.2. Press button 'Connect basal and apical regions' in the panel 'Geometric ventricle reconstruction pipeline'\
+    \
+    This connects every basal for all matching apical region ventricle objects and connects them with the looptools_bridge function from the Blender addon Looptools. Since this connection creates long quadrangular faces, the faces need to be split using an integrated insetting algorithm leading to faces where the deviation of edge lengths are reduced. After that the faces are triangulated and iteratively smoothed. These processes are done for every basal and apical region ventricle objects.
+    In this process, the valve connection is always at a fixed position, therefore no selection is necessary for the next step.
+
+5. Add atrium, aorta and valves\
+    5.1. Press button 'Add atrium, aorta and valves' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
     This copies objects for aorta, atrium, mitral and aortic valve found in the Blender-project and scales, rotates and positions them at their respective places.
 
