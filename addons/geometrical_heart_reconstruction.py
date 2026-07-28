@@ -1240,6 +1240,18 @@ def mesh_connect_apical_and_basal_pairs(context):
 
     return True
 
+def triangulate_object(obj):
+    me = obj.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+
+    bmesh.ops.triangulate(bm, faces=bm.faces[:])
+
+    # Finish up, write the bmesh back to the mesh
+    bm.to_mesh(me)
+    bm.free()
+
+# --- This function is where the bulk of the process happens. For every pair of basal and ventricle, this function is called and performs the connection and the smoothing
 def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
     ## Apply connecting operation for reference and save connecting edges used in the connection.
@@ -1247,37 +1259,8 @@ def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     edge_indices_bridge = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
     inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
     edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
+    triangulate_object(ventricle)
     bpy.data.objects.remove(basal) # Cleanup: Remove reference object.
-    """
-    # Compute the frame of the end diastole. Necessary for interpolated mitral valve.
-    frame_EDV = round(context.scene.time_diastole / context.scene.time_rr *  context.scene.frames_ventricle) 
-    # Compute volume list for computation of the intensity of smoothing of the connection between basal and apical region.
-    volumelist = compute_volumes(selected_objects, False)
-    if volumelist.index(min(volumelist)) > volumelist.index(max(volumelist)) or volumelist.index(min(volumelist)) != 0: cons_print(f"Warning: Ventricles not sorted.") # If list is not sorted
-    ## Apply connecting-operation for remaining ventricle geometries.
-    for counter, obj in enumerate(selected_objects):
-        basal = basal_regions[get_valve_state_index(context, counter, frame_EDV)] # Choose basal region.
-        # Apply connecting operation from reference.
-        prepare_geometry_for_bridging(obj, basal) 
-        bridge_edges_ventricle(obj, edge_indices_bridge)
-        inset_faces_smooth(context)
-        # Remove faces before triangulation.
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_more()
-        bpy.ops.mesh.delete(type='ONLY_FACE') 
-        bpy.ops.object.mode_set(mode='OBJECT')
-        # Triangulate mesh.
-        triangulate_connection(False, obj, edge_indices_triangulate)        
-        # Add faces onto triangulation.
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.mesh.edge_face_add()
-        bpy.ops.object.mode_set(mode='OBJECT')
-        # Smooth connection dependent on which geometry is smoothed.
-        smoothing_iter_factor = compute_smoothing_iteration_factor_connection(context, counter, volumelist)
-        smooth_connection_and_basal_region(context, obj, smoothing_iter_factor)
-        obj.hide_set(True) 
-    #for obj in selected_objects: obj.hide_set(False) # Cleanup: Unhide objects."""
 
 def get_valve_state_index(context, counter, frame_EDV):
     """Return the index of the basal region to be used for the given timestep"""
