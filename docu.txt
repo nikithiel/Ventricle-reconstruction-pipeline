@@ -1,0 +1,26 @@
+What does the pipeline do in this branch?
+- First, ventricle data is imported
+- The basal region of the ventricle data is trimmed at a certain arbitrary height the remaining ventricle objects is now referred as the apical region
+- For each of the apical regions, a matching basal region is created. However, all of them have mismatching topologies (different number of meshes, etc)
+- A BvH tree based transformation is performed on all the basal regions, by picking 1 object with the highest mesh count and using it as reference.
+then for every other object, a copy of this reference object is created and then transformed into the target object.
+- Then every basal object is connected to the matching apical region. Meshes are cerated between each of the 2 matching regions. 
+The resulting connected object are then treated as a single ventricle object again. Then the object mesh are triangulated.
+The same BvH tree based transformation is then performed on all objects to then match the topologies again
+- Then the aorta and mitral valves are added to the opening that was created when the basal region was generated
+
+What changes compared to the previous version?
+- The previous version only generates one basal object for every apical object. This means there is only one frame for the basal object and therefore not animated as a result.
+Now there is a basal region generated for every matching apical object. Meaning as a result the basal part of the heart would also be animated.
+- Now the connection also works for multiple basal with the matching apical object. Previously it did not work.
+- Previously there wasn't any topological matching functionality. Now it is implemented as a functional button, but it also works inherently within the other functions.
+- Quick Reconstrution now performs all of these instead.
+
+Current known bugs and issues:
+- Currently when the objects are exported, even if the topologies were already the same between all frames, it is no longer the same post export.
+- Relatively slow process for 11 frames (requiring a few seconds). Might not scale well for hundreds of animation frames.
+- The connection between the basal and apical part of the ventricles possibly look unnatural
+- The basal region also has unnatural movement when animated
+
+Current proposed soulutions for the listed issues:
+- 
