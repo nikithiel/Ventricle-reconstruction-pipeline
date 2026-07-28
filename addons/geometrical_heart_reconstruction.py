@@ -1226,6 +1226,7 @@ def mesh_connect_apical_and_basal_pairs(context):
             return None
     
     basal_region_names = [obj.name for obj in selected_objects]
+    apical_region_names = [obj.name[:-6] for obj in selected_objects] # Get a list of the matching apical regions for each item
 
     for name in basal_region_names:
         for obj in context.selected_objects:
@@ -1238,6 +1239,13 @@ def mesh_connect_apical_and_basal_pairs(context):
         # Combine matching apical and basal region
         combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
 
+    # Reselect only all of the connected apical and basal pairs
+    bpy.context.active_object.select_set(False)
+    for name in apical_region_names:
+        obj = bpy.data.objects.get(name)
+        obj.select_set(True)
+    
+    morph_topology(context) # Transform them so that the morphology matches
     return True
 
 def triangulate_object(obj):
@@ -1259,7 +1267,7 @@ def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     edge_indices_bridge = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
     inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
     edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
-    triangulate_object(ventricle)
+    triangulate_object(ventricle) # Triangulate any remaining non-triangulated mesh that was between the connections
     bpy.data.objects.remove(basal) # Cleanup: Remove reference object.
 
 def get_valve_state_index(context, counter, frame_EDV):
