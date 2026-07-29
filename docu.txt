@@ -9,7 +9,7 @@ The resulting connected object are then treated as a single ventricle object aga
 The same BvH tree based transformation is then performed on all objects to then match the topologies again
 - Then the aorta and mitral valves are added to the opening that was created when the basal region was generated
 
-What changes compared to the previous version?
+What changes compared to the other branches?
 - The previous version only generates one basal object for every apical object. This means there is only one frame for the basal object and therefore not animated as a result.
 Now there is a basal region generated for every matching apical object. Meaning as a result the basal part of the heart would also be animated.
 - Now the connection also works for multiple basal with the matching apical object. Previously it did not work.
@@ -22,5 +22,8 @@ Current known bugs and issues:
 - The connection between the basal and apical part of the ventricles possibly look unnatural
 - The basal region also has unnatural movement when animated
 
-Current proposed soulutions for the listed issues:
-- 
+Current proposed soulutions for the listed issues (to the same point relative above):
+- Currently no idea for how to solve the export bug
+- By hiding some ventricles and using less memory intensive methods. Need to be tested further.
+- To make the connection between basal and apical more natural, a basal position that's better generated would most likely have a better result
+- Most likely same solution as the previous point
