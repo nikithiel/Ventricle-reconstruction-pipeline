@@ -1,0 +1,68 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "addon_version": "2.1",
+    "trigger": "session_close",
+    "written_at": "2026-07-31 11:13:56",
+    "blend_file": "Y:\\Geno_Jayadi_GJA\\Ventricle-reconstruction-pipeline\\GVR-Pipeline.blend"
+  },
+  "files": {
+    "import_dir": "Y:\\Geno_Jayadi_GJA\\Ventricle-reconstruction-pipeline\\dataset\\example\\STL\\",
+    "export_dir": "Y:\\Geno_Jayadi_GJA\\sample_export_processed_noshift\\"
+  },
+  "position": {
+    "pos_top": [0.0, 0.0, 62.896046],
+    "pos_bot": [0.0, 0.0, 0.0],
+    "pos_septum": [0.0, 21.773327, 29.73023],
+    "rotation": null
+  },
+  "valves": {
+    "mitral": {
+      "translation_mm": [0.0, -7.0, 62.0],
+      "angle_deg": [0.0, 0.0, 0.0],
+      "radius_long": 7.99,
+      "radius_small": 6.14
+    },
+    "aortic": {
+      "translation_mm": [0.0, 14.0, 60.0],
+      "angle_deg": [-45.0, 0.0, 0.0],
+      "radius": 7.4
+    }
+  },
+  "setup_variables": {
+    "remove_basal_threshold": 42.0,
+    "mean_reference": false,
+    "interpolation": {
+      "time_rr": 0.557,
+      "time_diastole": 0.31892,
+      "frames_ventricle": 70
+    },
+    "poisson_depth": 5,
+    "connection": {
+      "connection_twist": 0,
+      "inset_faces_refinement_steps": 1
+    },
+    "connection_smoothing": {
+      "max_con_sm_iter": 25,
+      "min_con_sm_iter": 5,
+      "sm_reps": 3,
+      "con_fade_percentage": 20.0,
+      "final_sm_iter": 10
+    }
+  },
+  "pipeline": {
+    "approach": 4
+  },
+  "comparison": {
+    "plot_input_path": "C:\\Users\\genoj_pqt3a92\\Desktop\\Ventricle-reconstruction-pipeline\\plot_sample\\",
+    "live_compare": false,
+    "live_delete_temp": false
+  },
+  "internal": {
+    "height_plane": 48.122078,
+    "min_valves": 54.244152,
+    "ref_minima": [-12.374917, -14.533265, 0.0],
+    "ref_maxima": [14.307667, 7.919345, 40.464489],
+    "reference_object_name": "ventricle_7"
+  }
+}

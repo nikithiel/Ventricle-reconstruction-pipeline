@@ -245,3 +245,6 @@ Temporary Items
 
 # Personal use
 /vol_plot
+
+# plot script
+plot.py
