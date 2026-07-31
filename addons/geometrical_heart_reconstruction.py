@@ -2316,9 +2316,6 @@ class PANEL_Dev_tools(bpy.types.Panel):
         # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
         row = layout.row(align=True)
         row.operator('heart.object_transform', text = "Transform Objects", icon = "SHAPEKEY_DATA")
-        # Track movement of a vertices for debugging purposes and to plot
-        row = layout.row(align=True)
-        row.operator('heart.track_vertice', text = 'Track Vertice')
 
 #------
 
@@ -3174,39 +3171,6 @@ def BvH_transform(source,target):
         if loc:
             v.co = source.matrix_world.inverted() @ loc
 
-class MESH_OT_track_vert_movement(bpy.types.Operator):
-    """Track movement of vertices between all the frames"""
-    bl_idname = 'heart.track_vertice'
-    bl_label = 'Track Vertice'
-    def execute(self,context):
-        scene = context.scene
-        view_layer = context.view_layer
-
-        selected_objects = context.selected_objects
-        coordinates = []
-
-        for obj in selected_objects:
-            if obj.mode == 'EDIT':
-                bm = bmesh.from_edit_mesh(obj.data)
-                for v in bm.verts:
-                    if v.index == 861:
-                        cons_print(f'Vertex 501 of {obj.name} is at coordinate: {v.co}')
-                        coordinates.append(v.co)
-            else:
-                cons_print('Not in edit mode')
-
-        cons_print(coordinates)
-        """obj = bpy.context.object
-        if obj.mode == 'EDIT':
-            bm = bmesh.from_edit_mesh(obj.data)
-            for v in bm.verts:
-                if v.select:
-                    cons_print(f'Vertex {v.index} is at coordinate: {v.co}')
-        else:
-            cons_print('None selected or not in Edit mode')"""
-        
-        return {'FINISHED'}
-
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 
@@ -3214,7 +3178,7 @@ classes = [
     MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,
 ]
 
-dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_object_transform, MESH_OT_calculate_valve_diameter, MESH_OT_track_vert_movement]
+dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_object_transform, MESH_OT_calculate_valve_diameter]
 
 # Add new properties to the dict. register() and unregister() does not need to be changed. They will automatically register/unregister all properties in the dict.
 scene_properties = {
