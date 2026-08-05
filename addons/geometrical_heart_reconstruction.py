@@ -2046,6 +2046,21 @@ class PANEL_Pipeline(bpy.types.Panel):
             layout.operator('heart.ventricle_interpolation', text= "Interpolate ventricle", icon = 'EVENT_F6')
             row = layout.row()
         row.label(text= "Run pipeline", icon = 'PLAY')
+        
+        # Mitral valve reference value
+        row = layout.row()
+        row.prop(context.scene, "mitral_ref", text="Mitral ref ID")
+        # Aorta valve reference value
+        #row = layout.row()
+        row.prop(context.scene, "aorta_ref", text="Aorta ref ID")
+        
+        # Update mitral reference vertice ID with the currently selected ID 
+        row = layout.row()
+        row.operator('heart.update_mitral_ref', text="Update Mitral ref ID")
+        # Do the same as above for aortic reference vertice ID
+        #row = layout.row()
+        row.operator('heart.update_aorta_ref', text="Update Aorta ref ID")
+        
         row = layout.row()
         row.operator('heart.remove_basal', text= "Remove basal region", icon = 'LIBRARY_DATA_OVERRIDE')  
         row = layout.row()
@@ -2091,6 +2106,10 @@ class PANEL_Dev_tools(bpy.types.Panel):
         row = layout.row(align=True)
         row.operator('heart.plot_stl', text = "Show", icon = 'AXIS_FRONT')
         row.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
+        
+        # Track movement of a vertices for debugging purposes and to plot
+        row = layout.row(align=True)
+        row.operator('heart.track_vertice', text = 'Track Vertice')
 
 #------
 
@@ -2429,7 +2448,80 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
         
         
         return{"FINISHED"}
-            
+
+class MESH_OT_track_vertice(bpy.types.Operator):
+    """Track movement of vertices between all the frames"""
+    bl_idname = 'heart.track_vertice'
+    bl_label = 'Track Vertice'
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+
+        selected_objects = context.selected_objects
+        coordinates = []
+
+        for obj in selected_objects:
+            if obj.mode == 'EDIT':
+                bm = bmesh.from_edit_mesh(obj.data)
+                for v in bm.verts:
+                    if v.index == 501:
+                        cons_print(f'Vertex 501 of {obj.name} is at coordinate: {v.co}')
+                        coordinates.append(v.co)
+            else:
+                cons_print('Not in edit mode')
+
+        cons_print(coordinates)
+        """obj = bpy.context.object
+        if obj.mode == 'EDIT':
+            bm = bmesh.from_edit_mesh(obj.data)
+            for v in bm.verts:
+                if v.select:
+                    cons_print(f'Vertex {v.index} is at coordinate: {v.co}')
+        else:
+            cons_print('None selected or not in Edit mode')"""
+        
+        return {'FINISHED'}            
+
+class MESH_OT_update_mitral_ref(bpy.types.Operator):
+    """Update the vertex ID for mitral valve reference"""
+    bl_idname = 'heart.update_mitral_ref'
+    bl_label = 'Update Mitral Reference Vertex'
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+        
+        selected_objects = context.selected_objects
+
+        for obj in selected_objects:
+            if obj.mode == 'EDIT':
+                bm = bmesh.from_edit_mesh(obj.data)
+                for v in bm.verts:
+                    if v.select:
+                        context.scene.mitral_ref = v.index
+            else:
+                cons_print('Not in edit mode')
+        return {"FINISHED"}
+    
+class MESH_OT_update_aorta_ref(bpy.types.Operator):
+    """Update the vertex ID for aortic valve reference"""
+    bl_idname = 'heart.update_aorta_ref'
+    bl_label = 'Update Mitral Reference Vertex'
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+        
+        selected_objects = context.selected_objects
+
+        for obj in selected_objects:
+            if obj.mode == 'EDIT':
+                bm = bmesh.from_edit_mesh(obj.data)
+                for v in bm.verts:
+                    if v.select:
+                        context.scene.aorta_ref = v.index
+            else:
+                cons_print('Not in edit mode')
+        return {"FINISHED"}
+    
 # -------------------------------------------------------------------
 # Helpers for ventricle detection and STL export
 # -------------------------------------------------------------------
@@ -2586,9 +2678,15 @@ classes = [
     MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,
 ]
 
-dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_object_transform, MESH_OT_calculate_valve_diameter]
+dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, 
+               PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, 
+               MESH_OT_object_transform, MESH_OT_calculate_valve_diameter, MESH_OT_track_vertice,
+               MESH_OT_update_mitral_ref, MESH_OT_update_aorta_ref]
   
 def register():
+    # Reference points.
+    bpy.types.Scene.mitral_ref = bpy.props.IntProperty(name="Reference point used to track the movement of the mitral valve")
+    bpy.types.Scene.aorta_ref = bpy.props.IntProperty(name="Reference point used to track the movement of the aortic valve")
     # Position variables.
     bpy.types.Scene.pos_top = bpy.props.FloatVectorProperty(name="Top position", default = (0,0,1))
     bpy.types.Scene.pos_bot = bpy.props.FloatVectorProperty(name="Top position", default = (0,0,0))
@@ -2655,7 +2753,6 @@ def register():
     if dev_env_tools: 
         for c in dev_classes: bpy.utils.register_class(c)
 
-    
 def unregister(): # Unregister classes.
     for c in classes: bpy.utils.unregister_class(c)
     if dev_env_tools:
