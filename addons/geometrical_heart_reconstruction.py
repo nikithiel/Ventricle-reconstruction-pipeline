@@ -902,15 +902,18 @@ def build_valve_surface(context, obj, valve_mode, ratio, valve_index):
 
 def update_value_for_translation(context, frame_id):
     """Update the translation values in the valve options panel using saved data from relative data value"""
+    cons_print(f"Position for object {frame_id} shifted")
     if not context.object["mitral_position_matrix"] or not context.object["aortic_position_matrix"]:
         return False
     elif frame_id == 0:
         return True
     else:
-        mitral_diff = np.array(context.object["mitral_position_matrix"])[frame_id] - np.array(context.object["mitral_position_matrix"])[0]
-        aortic_diff = np.array(context.object["aortic_position_matrix"])[frame_id] - np.array(context.object["aortic_position_matrix"])[0]
+        # Just updates the value using the previous frame as reference position
+        mitral_diff = np.array(context.object["mitral_position_matrix"])[frame_id] - np.array(context.object["mitral_position_matrix"])[frame_id - 1]
+        aortic_diff = np.array(context.object["aortic_position_matrix"])[frame_id] - np.array(context.object["aortic_position_matrix"])[frame_id - 1]
         context.scene.translation_mitral += mitral_diff
         context.scene.translation_aortic += aortic_diff
+        return True
         
 class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
@@ -927,7 +930,9 @@ def mesh_create_basal_batch(context):
     for obj in selected_objects:
         frame_id = obj.name[-1]
         if not update_value_for_translation(context, int(frame_id)): return{'CANCELLED'}
-        if not mesh_create_basal(context, [obj]): return{'CANCELLED'}
+        if not mesh_create_basal(context, [obj]): 
+            cons_print("FAILED")
+            return{'CANCELLED'}
     # Selects all the objects for the next step
     for obj in selected_objects:
         stringname = obj.name + "_basal"
@@ -1437,7 +1442,7 @@ class MESH_OT_Ventricle_Sort(bpy.types.Operator):
     bl_label = 'Sort ventricles by volume starting with ESV.'
     def execute(self, context):
         cons_print(np.array(context.object["mitral_position_matrix"]))
-        if not sort_ventricles(context.selected_objects): return{'CANCELLED'}
+        #if not sort_ventricles(context.selected_objects): return{'CANCELLED'}
         return{'FINISHED'}
 
 def sort_ventricles(selected_objects):
