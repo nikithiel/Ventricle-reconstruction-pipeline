@@ -411,9 +411,9 @@ def remove_multiple_basal_region(context):
 def remove_basal_region(context, obj, del_nodes):
     """Remove basal region of the ventricle using a threshold"""
     if obj.mode == 'OBJECT': 
-        bpy.ops.object.mode_set(mode='EDIT') # Toggle to object mode.
+        bpy.ops.object.mode_set(mode='EDIT') # Toggle to edit mode.
     bpy.context.tool_settings.mesh_select_mode = (True, False, False) # Go into vertex mode
-    bpy.ops.object.mode_set(mode='OBJECT') # Toggle to object mode.
+    #bpy.ops.object.mode_set(mode='OBJECT') # Toggle to object mode.
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
     deselect_object_vertices(obj)
@@ -900,6 +900,18 @@ def build_valve_surface(context, obj, valve_mode, ratio, valve_index):
     bpy.ops.object.vertex_group_select()
     bpy.ops.object.mode_set(mode='OBJECT') 
 
+def update_value_for_translation(context, frame_id):
+    """Update the translation values in the valve options panel using saved data from relative data value"""
+    if not context.object["mitral_position_matrix"] or not context.object["aortic_position_matrix"]:
+        return False
+    elif frame_id == 0:
+        return True
+    else:
+        mitral_diff = np.array(context.object["mitral_position_matrix"])[frame_id] - np.array(context.object["mitral_position_matrix"])[0]
+        aortic_diff = np.array(context.object["aortic_position_matrix"])[frame_id] - np.array(context.object["aortic_position_matrix"])[0]
+        context.scene.translation_mitral += mitral_diff
+        context.scene.translation_aortic += aortic_diff
+        
 class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal regions of ventricles using the position and angles of the heart valves.'
@@ -913,7 +925,10 @@ def mesh_create_basal_batch(context):
             return False
     selected_objects = context.selected_objects
     for obj in selected_objects:
+        frame_id = obj.name[-1]
+        if not update_value_for_translation(context, int(frame_id)): return{'CANCELLED'}
         if not mesh_create_basal(context, [obj]): return{'CANCELLED'}
+    # Selects all the objects for the next step
     for obj in selected_objects:
         stringname = obj.name + "_basal"
         basalobj = bpy.data.objects.get(stringname)
@@ -1421,6 +1436,7 @@ class MESH_OT_Ventricle_Sort(bpy.types.Operator):
     bl_idname = 'heart.sort_ventricles'
     bl_label = 'Sort ventricles by volume starting with ESV.'
     def execute(self, context):
+        cons_print(np.array(context.object["mitral_position_matrix"]))
         if not sort_ventricles(context.selected_objects): return{'CANCELLED'}
         return{'FINISHED'}
 
@@ -2110,10 +2126,6 @@ class PANEL_Dev_tools(bpy.types.Panel):
         row = layout.row(align=True)
         row.operator('heart.plot_stl', text = "Show", icon = 'AXIS_FRONT')
         row.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
-        
-        # Track movement of a vertices for debugging purposes and to plot
-        row = layout.row(align=True)
-        row.operator('heart.track_vertice', text = 'Track Vertice')
 
 #------
 
@@ -2519,8 +2531,14 @@ class MESH_OT_store_ref_positions(bpy.types.Operator):
                 cons_print('Not in edit mode')
         
         #cons_print(f"Value stored for mitral and aortic as {mitral_relative_positions[2]} and {aortic_relative_positions[2]} respectively")
-        context.object["mitral_position_matrix"] = mitral_relative_positions
-        context.object["aortic_position_matrix"] = aortic_relative_positions
+        #context.scene.mitral_positions = mitral_relative_positions
+        #context.scene.aortic_positions = aortic_relative_positions
+        
+        # Store the values in every object?
+        for obj in selected_objects:
+            obj["mitral_position_matrix"] = mitral_relative_positions
+            obj["aortic_position_matrix"] = aortic_relative_positions
+        cons_print("Positions stored")
         return {"FINISHED"}
 # -------------------------------------------------------------------
 # Helpers for ventricle detection and STL export
@@ -2680,7 +2698,7 @@ classes = [
 
 dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, 
                PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, 
-               MESH_OT_object_transform, MESH_OT_calculate_valve_diameter, MESH_OT_track_vertice,
+               MESH_OT_object_transform, MESH_OT_calculate_valve_diameter,
                MESH_OT_update_mitral_ref, MESH_OT_update_aorta_ref, MESH_OT_store_ref_positions]
   
 def register():
