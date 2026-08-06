@@ -2061,6 +2061,10 @@ class PANEL_Pipeline(bpy.types.Panel):
         #row = layout.row()
         row.operator('heart.update_aorta_ref', text="Update Aorta ref ID")
         
+        # Store the positions for all the matrices
+        row = layout.row()
+        row.operator('heart.store_ref_positions', text ="Store reference positions")
+        
         row = layout.row()
         row.operator('heart.remove_basal', text= "Remove basal region", icon = 'LIBRARY_DATA_OVERRIDE')  
         row = layout.row()
@@ -2447,40 +2451,7 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
         context.scene.aortic_radius = res[2] * 1000
         
         
-        return{"FINISHED"}
-
-class MESH_OT_track_vertice(bpy.types.Operator):
-    """Track movement of vertices between all the frames"""
-    bl_idname = 'heart.track_vertice'
-    bl_label = 'Track Vertice'
-    def execute(self,context):
-        scene = context.scene
-        view_layer = context.view_layer
-
-        selected_objects = context.selected_objects
-        coordinates = []
-
-        for obj in selected_objects:
-            if obj.mode == 'EDIT':
-                bm = bmesh.from_edit_mesh(obj.data)
-                for v in bm.verts:
-                    if v.index == 501:
-                        cons_print(f'Vertex 501 of {obj.name} is at coordinate: {v.co}')
-                        coordinates.append(v.co)
-            else:
-                cons_print('Not in edit mode')
-
-        cons_print(coordinates)
-        """obj = bpy.context.object
-        if obj.mode == 'EDIT':
-            bm = bmesh.from_edit_mesh(obj.data)
-            for v in bm.verts:
-                if v.select:
-                    cons_print(f'Vertex {v.index} is at coordinate: {v.co}')
-        else:
-            cons_print('None selected or not in Edit mode')"""
-        
-        return {'FINISHED'}            
+        return{"FINISHED"}      
 
 class MESH_OT_update_mitral_ref(bpy.types.Operator):
     """Update the vertex ID for mitral valve reference"""
@@ -2521,7 +2492,36 @@ class MESH_OT_update_aorta_ref(bpy.types.Operator):
             else:
                 cons_print('Not in edit mode')
         return {"FINISHED"}
-    
+
+class MESH_OT_store_ref_positions(bpy.types.Operator):
+    """Store the points of the the mitral and aortic reference vertices. It is stored within the session"""
+    bl_idname = 'heart.store_ref_positions'
+    bl_label = 'Stores reference vertices positions'
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+        
+        mitral_ref_ID = context.scene.mitral_ref
+        aortic_ref_ID = context.scene.aorta_ref
+        mitral_relative_positions = []
+        aortic_relative_positions = []
+
+        selected_objects = context.selected_objects
+        for obj in selected_objects:
+            if obj.mode == 'EDIT':
+                bm = bmesh.from_edit_mesh(obj.data)
+                for v in bm.verts:
+                    if v.index == mitral_ref_ID:
+                        mitral_relative_positions.append(np.array(v.co))
+                    if v.index == aortic_ref_ID:
+                        aortic_relative_positions.append(np.array(v.co))
+            else:
+                cons_print('Not in edit mode')
+        
+        #cons_print(f"Value stored for mitral and aortic as {mitral_relative_positions[2]} and {aortic_relative_positions[2]} respectively")
+        context.object["mitral_position_matrix"] = mitral_relative_positions
+        context.object["aortic_position_matrix"] = aortic_relative_positions
+        return {"FINISHED"}
 # -------------------------------------------------------------------
 # Helpers for ventricle detection and STL export
 # -------------------------------------------------------------------
@@ -2681,7 +2681,7 @@ classes = [
 dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, 
                PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, 
                MESH_OT_object_transform, MESH_OT_calculate_valve_diameter, MESH_OT_track_vertice,
-               MESH_OT_update_mitral_ref, MESH_OT_update_aorta_ref]
+               MESH_OT_update_mitral_ref, MESH_OT_update_aorta_ref, MESH_OT_store_ref_positions]
   
 def register():
     # Reference points.
