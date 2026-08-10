@@ -46,15 +46,14 @@ except Exception as _session_log_error:
     print(f"[GVR] session_log unavailable: {_session_log_error}")
 
 scene = bpy.types.Scene
-
 dev_env_tools = True
 
+MITRAL_REF_VERTICE = 501
 # Generally used functions.
 def _cons_rule(title):
     """Console separator so each button press forms one visually grouped block."""
     cons_print("")
     cons_print(f"===== {title} =====")
-
 
 def cons_print(data):
     """Print to console for button presses. Used for error messages, information outputs and warnings"""
@@ -440,11 +439,12 @@ def remove_multiple_basal_region(context):
     deleted_verts = remove_basal_region(context, reference_copy, []) # Remove in reference object
     for obj in selected_objects: remove_basal_region(context, obj, deleted_verts) 
     # Longitudinal shift of each ventricle to match reference object, reducing volume discrepancy between systole and diastole between raw data and reconstructed data.
-    shift_ventricles_longitudinally(context, selected_objects)
+    shift_distances = shift_ventricles_longitudinally(context, selected_objects)
     context.scene.ref_maxima, context.scene.ref_minima = get_min_max(reference_copy)    
     # Cleanup.
     for obj in selected_objects: obj.select_set(True) # Reselect objects from original selection after main operations are executed.
     bpy.data.objects.remove(bpy.data.objects["reference"], do_unlink=True) # Remove reference object.
+    return shift_distances
 
 def remove_basal_region(context, obj, del_nodes):
     """Remove basal region of the ventricle using a threshold"""
@@ -560,15 +560,25 @@ def smooth_apical_region(obj, vg_orifice):
 
 def shift_ventricles_longitudinally(context, objects):
     """Shift ventricle to reference ventricle"""
+    shift_distances = []
     for obj in objects:
         max_obj_val, min_obj_val = get_min_max(obj)
-        shift_distance =  context.scene.remove_basal_threshold - max_obj_val[2] 
+        shift_distance =  context.scene.remove_basal_threshold - max_obj_val[2]
+        shift_distances.append(shift_distance) 
         obj.select_set(True)
         bpy.context.view_layer.objects.active = obj
         obj['long_shift'] = shift_distance
         bpy.context.object.location[2] = shift_distance
         bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
         obj.select_set(False)
+    return shift_distances
+
+def unshift_everything_longitudinally(context,objects,shift_distances):
+    mean_shift = np.mean(shift_distances)
+    meshes = bpy.data.meshes
+    for mesh in meshes:
+        for vertex in mesh.vertices:
+            vertex.co[2] -= mean_shift
 
 class MESH_OT_build_valves(bpy.types.Operator):
     """Create geometry for mitral and aortic valve"""
@@ -971,34 +981,6 @@ class MESH_OT_create_basal(bpy.types.Operator):
         if not mesh_create_basal(context): return{'CANCELLED'}
         return{'FINISHED'} 
 
-"""def mesh_create_basal(context, selected_objects):
-    if len(selected_objects) == 1:
-        #bpy.types.Scene.reference_object_name = selected_objects[0].name
-        context.scene.reference_object_name = selected_objects[0].name
-    else:
-        cons_print(f"Currently does not work :(")
-        return False
-    #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
-    reference_copy = copy_object(selected_objects[0].name, 'basal_region')
-    # Deselect objects.
-    for obj in selected_objects: obj.select_set(False)
-    # Operations to create basal region of the ventricle.
-    basal_regions = create_basal_region_for_object(context, reference_copy)
-    if not basal_regions: 
-        cons_print(f"Error during the creation of the basal regions.")
-        return False # If an error ocurred during creation of basal region, dont continue.
-    # Cleanup.
-    # Reselect objects to state previous to this operation and deselect (and hide for performance) created objects.
-    for obj in selected_objects: obj.select_set(True)
-    for basal in basal_regions:  
-        basal.select_set(False)
-        basal.hide_set(True)
-    # Remove old basal region objects.
-    if context.scene.approach == 5: bpy.data.objects.remove(bpy.data.objects["basal_ref"], do_unlink=True)
-    bpy.data.objects.remove(bpy.data.objects["basal_region"], do_unlink=True)
-    bpy.data.objects.remove(bpy.data.objects["basal_region_poisson"], do_unlink=True)
-    return basal_regions"""
-
 def mesh_create_basal(context):
     """Create basal region"""
     cons_print("Create basal regions for selected ventricles...")
@@ -1028,7 +1010,6 @@ def mesh_create_basal(context):
     bpy.data.objects.remove(bpy.data.objects["basal_region_poisson"], do_unlink=True)
     return basal_regions
 
-
 def find_reference_ventricle_max(objects): 
     """Find reference object with the largest volume and return its name"""
     max_volume = -float('inf')
@@ -1041,7 +1022,6 @@ def find_reference_ventricle_max(objects):
             max_volume = volume
             reference_name = obj.name
     return reference_name
-
 
 def find_reference_ventricle_mean(objects): 
     """Find reference object with mean volume and return its name"""
@@ -1470,7 +1450,6 @@ def triangulate_connection(bool_ref, obj, ref_edge_indices):
         bpy.ops.object.mode_set(mode='OBJECT') # Change to object mode.
     return edges_vert_indices_tri
 
-
 def compute_smoothing_iteration_factor_connection(context, counter, volumelist):
     """Compute how strongly the connection between basal and apical region is smoothed.
 
@@ -1794,12 +1773,19 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
         # Remember the ventricles by name: mesh_connect_apical_and_basal() clears the selection, and the
         # guard below still needs to compare all frames against each other.
         ventricle_names = [obj.name for obj in find_ventricle_objects(context.selected_objects)]
-        remove_multiple_basal_region(context) # Remove old basal region.
+        shift_distances = remove_multiple_basal_region(context) # Remove old basal region.
         if not mesh_create_basal(context): return{'CANCELLED'}# Operations to create basal region of the ventricle containing valve orifices.
         if not mesh_connect_apical_and_basal(context): return {'CANCELLED'} # Connect apical regions with corresponding bassal regions.
         add_vessels_and_valves(context) # Add surrounding objects including aorta, atrium and valves.
         ventricles = [bpy.data.objects[name] for name in ventricle_names if name in bpy.data.objects]
         error = check_pipeline_triangulated(context, ventricles)
+        # reselect all the ventricles
+        for obj in ventricles:
+            obj.select_set(True)
+
+        # Unshift everything afterwards
+        unshift_everything_longitudinally(context,context.selected_objects, shift_distances)
+
         if error:
             cons_print(error)
             self.report({'ERROR'}, error)
@@ -2694,7 +2680,6 @@ def _qt_available():
             pass
     return False
 
-
 def _plot_python_exe():
     """Pick a Python that actually has matplotlib/numpy/scipy (and ideally PyQt5). This
     addon is normally run from a project venv exposed to Blender via PYTHONPATH, so PREFER
@@ -2719,7 +2704,6 @@ def _plot_python_exe():
             if os.path.isfile(cand):
                 return cand
     return os.path.join(sys.exec_prefix, "bin", "python.exe")  # Blender's bundled python
-
 
 def _launch_plot_subprocess(input_path, plot_input_dir, base_dir, interp_method,
                             save_csv=False, save_png="", delete_dir=""):
@@ -2766,7 +2750,6 @@ def _launch_plot_subprocess(input_path, plot_input_dir, base_dir, interp_method,
 
     return log_path
 
-
 def _report_volume_diff(inputsetting, plot_input_dir, rotated_dir):
     """Print the per-frame processed-vs-raw volume % difference (min/max) to the Blender
     console. derive_* prints the same numbers, but in the normal 'Show' path it runs in a
@@ -2781,7 +2764,6 @@ def _report_volume_diff(inputsetting, plot_input_dir, rotated_dir):
         return
     for line in format_volume_diff_lines(d):
         cons_print(line)
-
 
 class MESH_OT_plot_STL(bpy.types.Operator):
     """Display the plot"""
@@ -3188,7 +3170,7 @@ def BvH_transform(source,target):
 
         if loc:
             v.co = source.matrix_world.inverted() @ loc
-    
+
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 
