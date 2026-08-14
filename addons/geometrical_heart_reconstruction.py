@@ -1434,8 +1434,8 @@ class MESH_OT_Ventricle_Sort(bpy.types.Operator):
     bl_idname = 'heart.sort_ventricles'
     bl_label = 'Sort ventricles by volume starting with ESV.'
     def execute(self, context):
-        cons_print(np.array(context.object["mitral_position_matrix"]))
-        #if not sort_ventricles(context.selected_objects): return{'CANCELLED'}
+        #cons_print(np.array(context.object["mitral_position_matrix"]))
+        if not sort_ventricles(context.selected_objects): return{'CANCELLED'}
         return{'FINISHED'}
 
 def sort_ventricles(selected_objects):
