@@ -900,17 +900,14 @@ def build_valve_surface(context, obj, valve_mode, ratio, valve_index):
     bpy.ops.object.vertex_group_select()
     bpy.ops.object.mode_set(mode='OBJECT') 
 
-def update_value_for_translation(context, frame_id):
+def update_value_for_translation(context, frame_id, pos_matrix_mitral, pos_matrix_aortic):
     """Update the translation values in the valve options panel using saved data from relative data value"""
-    cons_print(f"Position for object {frame_id} shifted")
-    if not context.object["mitral_position_matrix"] or not context.object["aortic_position_matrix"]:
-        return False
-    elif frame_id == 0:
+    if frame_id == 0:
         return True
     else:
         # Just updates the value using the previous frame as reference position
-        mitral_diff = np.array(context.object["mitral_position_matrix"])[frame_id] - np.array(context.object["mitral_position_matrix"])[frame_id - 1]
-        aortic_diff = np.array(context.object["aortic_position_matrix"])[frame_id] - np.array(context.object["aortic_position_matrix"])[frame_id - 1]
+        mitral_diff = np.array(pos_matrix_mitral)[frame_id] - np.array(pos_matrix_mitral)[frame_id - 1]
+        aortic_diff = np.array(pos_matrix_aortic)[frame_id] - np.array(pos_matrix_aortic)[frame_id - 1]
         context.scene.translation_mitral += mitral_diff
         context.scene.translation_aortic += aortic_diff
         return True
@@ -927,9 +924,11 @@ def mesh_create_basal_batch(context):
             cons_print("No elements selected.")
             return False
     selected_objects = context.selected_objects
+    pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
+    pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
     for obj in selected_objects:
         frame_id = obj.name[-1]
-        if not update_value_for_translation(context, int(frame_id)): return{'CANCELLED'}
+        if not update_value_for_translation(context, int(frame_id), pos_matrix_mitral, pos_matrix_aortic): return{'CANCELLED'}
         if not mesh_create_basal(context, [obj]): 
             cons_print("FAILED")
             return{'CANCELLED'}
@@ -1441,7 +1440,8 @@ class MESH_OT_Ventricle_Sort(bpy.types.Operator):
     bl_idname = 'heart.sort_ventricles'
     bl_label = 'Sort ventricles by volume starting with ESV.'
     def execute(self, context):
-        if not sort_ventricles(context.selected_objects): return{'CANCELLED'}
+        cons_print(np.array(context.object["mitral_position_matrix"]))
+        #if not sort_ventricles(context.selected_objects): return{'CANCELLED'}
         return{'FINISHED'}
 
 def sort_ventricles(selected_objects):
