@@ -402,7 +402,7 @@ def remove_multiple_basal_region(context):
     deleted_verts = remove_basal_region(context, reference_copy, []) # Remove in reference object
     for obj in selected_objects: remove_basal_region(context, obj, deleted_verts) 
     # Longitudinal shift of each ventricle to match reference object, reducing volume discrepancy between systole and diastole between raw data and reconstructed data.
-    shift_ventricles_longitudinally(context, selected_objects)
+    #shift_ventricles_longitudinally(context, selected_objects)
     context.scene.ref_maxima, context.scene.ref_minima = get_min_max(reference_copy)    
     # Cleanup.
     for obj in selected_objects: obj.select_set(True) # Reselect objects from original selection after main operations are executed.
@@ -1441,8 +1441,7 @@ class MESH_OT_Ventricle_Sort(bpy.types.Operator):
     bl_idname = 'heart.sort_ventricles'
     bl_label = 'Sort ventricles by volume starting with ESV.'
     def execute(self, context):
-        cons_print(np.array(context.object["mitral_position_matrix"]))
-        #if not sort_ventricles(context.selected_objects): return{'CANCELLED'}
+        if not sort_ventricles(context.selected_objects): return{'CANCELLED'}
         return{'FINISHED'}
 
 def sort_ventricles(selected_objects):
