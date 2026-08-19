@@ -916,7 +916,8 @@ class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal regions of ventricles using the position and angles of the heart valves.'
     def execute(self, context):
-        mesh_create_basal_batch(context)
+        _, matrices = mesh_create_basal_batch(context)
+        translate_and_morph_batch(context, matrices)
         return{'FINISHED'} 
 
 def mesh_create_basal_batch(context):
@@ -938,7 +939,7 @@ def mesh_create_basal_batch(context):
         basalobj = bpy.data.objects.get(stringname)
         basalobj.select_set(state=True)
         obj.select_set(state=False)
-    return True
+    return True, (pos_matrix_mitral, pos_matrix_aortic)
 
 def mesh_create_basal(context, selected_objects):
     """Create Basal Regions for each of the selected objects"""
@@ -1202,6 +1203,33 @@ def select_only_inner_basal_vertices():
     bpy.ops.object.vertex_group_deselect()
     bpy.ops.object.mode_set(mode='OBJECT') 
 
+def translate_mesh(context, obj, shift):
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    
+    for v in bm.verts:
+        for i in range(len(v.co)):
+            v.co[i] += shift[i]
+    
+    return True
+        
+def translate_and_morph_batch(context, matrices):
+    selected_objects = context.selected_objects
+    pos_matrix_mitral = matrices[0]
+    pos_matrix_aortic = matrices[1]
+    
+    ref = selected_objects[0]
+    for i in range(1,len(selected_objects)):
+        # This only works if the relative index of the selected objects matches the position matrix.
+        ref_copy = copy_object(ref.name, ref.name + '_COPY')
+        shift = pos_matrix_mitral[i] - pos_matrix_mitral[0]
+        translate_mesh(context,ref_copy, shift) # Shift
+        BvH_transform(ref_copy,selected_objects[i]) # Morph it
+        translate_mesh(context,ref_copy, -shift) # Unshift
+        temp_name = selected_objects[i].name
+        bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
+        ref_copy.name = temp_name # Rename reference object
+    
 class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
     """Connect apical and basal region of ventricle"""
     bl_idname = 'heart.connect_apical_and_basal'
@@ -2691,7 +2719,6 @@ def BvH_transform(source,target):
 
         if loc:
             v.co = source.matrix_world.inverted() @ loc
-    cons_print(f"Transformation from {source} to {target} successful")
 
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
