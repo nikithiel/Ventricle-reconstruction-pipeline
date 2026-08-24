@@ -916,6 +916,7 @@ class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal regions of ventricles using the position and angles of the heart valves.'
     def execute(self, context):
+        """Values aus Daniel 0,-4,50.5 und 0,4,50.5"""
         _, matrices = mesh_create_basal_batch(context)
         translate_and_morph_batch(context, matrices)
         return{'FINISHED'} 
@@ -1204,31 +1205,48 @@ def select_only_inner_basal_vertices():
     bpy.ops.object.mode_set(mode='OBJECT') 
 
 def translate_mesh(context, obj, shift):
-    bm = bmesh.new()
-    bm.from_mesh(obj.data)
+    if obj.mode == "EDIT":
+        cons_print("if")
+        bm = bmesh.from_edit_mesh(obj.data)
+        edbm = True
+    else:
+        cons_print("else")
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        edbm = False
     
+    cons_print(shift)
     for v in bm.verts:
         for i in range(len(v.co)):
             v.co[i] += shift[i]
-    
+            
+    bm.to_mesh(obj.data)
+    obj.data.update()
+    bpy.ops.Object.mode_set(mode="OBJECT")
     return True
         
 def translate_and_morph_batch(context, matrices):
     selected_objects = context.selected_objects
     pos_matrix_mitral = matrices[0]
     pos_matrix_aortic = matrices[1]
+    bpy.ops.object.mode_set(mode='EDIT') 
     
+    """for ob in selected_objects:
+        also_select_lower_regions(ob)"""
+     
     ref = selected_objects[0]
     for i in range(1,len(selected_objects)):
         # This only works if the relative index of the selected objects matches the position matrix.
         ref_copy = copy_object(ref.name, ref.name + '_COPY')
-        shift = pos_matrix_mitral[i] - pos_matrix_mitral[0]
+        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
+        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
+        shift = shift_mitral + shift_aortic / 2
+        #bpy.ops.Object.mode_set(mode="EDIT")
         translate_mesh(context,ref_copy, shift) # Shift
         BvH_transform(ref_copy,selected_objects[i]) # Morph it
-        translate_mesh(context,ref_copy, -shift) # Unshift
         temp_name = selected_objects[i].name
-        bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
-        ref_copy.name = temp_name # Rename reference object
+        #bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
+        #ref_copy.name = temp_name # Rename reference object
     
 class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
     """Connect apical and basal region of ventricle"""
@@ -1257,6 +1275,27 @@ def select_lower_regions(region):
         bpy.ops.object.mode_set(mode='OBJECT')
         # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
         curr_basal.select_set(False)
+        #curr_basal.hide_set(True)
+    
+def also_select_lower_regions(region):
+    name = region.name
+    if not name in bpy.data.objects: # Check if all necessary basal regions are present.
+        cons_print(f"Missing following basal region: {name}")
+        return False       
+    else:  
+        curr_basal = bpy.data.objects[name]
+        # Unhide current basal region and use it as active object.
+        curr_basal.hide_set(False)
+        curr_basal.select_set(True)
+        bpy.context.view_layer.objects.active = curr_basal
+        # Select only lower basal edge loop vertex group.
+        #deselect_object_vertices(curr_basal)
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.object.vertex_group_set_active(group=str("lower_basal_edge_loop"))
+        bpy.ops.object.vertex_group_select()
+        #bpy.ops.object.mode_set(mode='OBJECT')
+        # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
+        #curr_basal.select_set(False)
         #curr_basal.hide_set(True)
 
 def mesh_connect_apical_and_basal_pairs(context):
@@ -2713,12 +2752,13 @@ def BvH_transform(source,target):
     bvh = BVHTree.FromObject(target, bpy.context.evaluated_depsgraph_get())
     
     for v in source.data.vertices:
-        world_co = source.matrix_world @ v.co
+        if v.select:
+            world_co = source.matrix_world @ v.co
 
-        loc, _, _, _ = bvh.find_nearest(world_co)
+            loc, _, _, _ = bvh.find_nearest(world_co)
 
-        if loc:
-            v.co = source.matrix_world.inverted() @ loc
+            if loc:
+                v.co = source.matrix_world.inverted() @ loc
 
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
