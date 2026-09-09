@@ -1321,7 +1321,11 @@ class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
     bl_idname = 'heart.connect_apical_and_basal'
     bl_label = 'Connect apical and basal region of ventricle.'
     def execute(self, context):
-        if not mesh_connect_apical_and_basal_pairs(context): return {'CANCELLED'}
+        _, finished_names = mesh_connect_apical_and_basal_pairs(context)
+        for name in finished_names:
+            obj = bpy.data.objects.get(name)
+            obj.select_set(True)
+        shift_shrinkwrap_topology_batch(context)
         return {'FINISHED'} 
 
 def select_lower_regions(region):
@@ -1370,6 +1374,7 @@ def mesh_connect_apical_and_basal_pairs(context):
     """Connect apical and basal region of the ventricle pairs"""
     # Here there should only be basal regions that are selected. 
     selected_objects = context.selected_objects
+    finished_name = []
 
     # Checks if every basal region has a pair (file with the same name except no _basal at the end)
     for obj in selected_objects:
@@ -1389,8 +1394,9 @@ def mesh_connect_apical_and_basal_pairs(context):
 
         # Combine matching apical and basal region
         combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
+        finished_name.append(name[:-6])
 
-    return True
+    return True, finished_name
 
 def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
@@ -2026,10 +2032,10 @@ def test_function(context):
     for i in range(1,len(selected_objects)):
         source = ref = bpy.data.objects.get(temp_name)
         source_copy = copy_object(source.name, source.name + '_COPY')
-        target = selected_objects[i]
+        #target = selected_objects[i]
         shift = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
 
-        shift_shrinkwrap_topology(context, source_copy, target, shift) # Shifts and then shrinkwraps
+        shift_shrinkwrap_topology(context, source_copy, selected_objects[i], shift) # Shifts and then shrinkwraps
         
         temp_name = selected_objects[i].name
         bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
@@ -2858,17 +2864,17 @@ def shift_shrinkwrap_topology_batch(context):
     pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
     pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
     
+    temp_name = selected_objects[0].name
     for i in range(1,len(selected_objects)):
-        source = selected_objects[i-1]
+        source = ref = bpy.data.objects.get(temp_name)
         source_copy = copy_object(source.name, source.name + '_COPY')
-        target = selected_objects[i]
         shift = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
 
-        shift_shrinkwrap_topology(context, source_copy, target, shift) # Shifts and then shrinkwraps
+        shift_shrinkwrap_topology(context, source_copy, selected_objects[i], shift) # Shifts and then shrinkwraps
         
+        temp_name = selected_objects[i].name
         bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
-        #selected_objects[i].name = selected_objects[i].name + "_FALSE"
-        ref_copy.name = temp_name # Rename reference object
+        source_copy.name = temp_name # Rename reference object
 
 def shift_shrinkwrap_topology(context, source, target, shift):
     """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
