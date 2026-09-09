@@ -58,18 +58,22 @@ def copy_object(input_name, output_name):
     bpy.context.collection.objects.link(new_obj)
     return new_obj
 
-def deselect_object_vertices(obj):
+def deselect_object_vertices(obj, set_to_object=True):
     """Go into edit mode and deselect all vertices of an object"""
     # Transfer data into edit mode.
     me = obj.data
-    bpy.ops.object.mode_set(mode='EDIT') 
+    if not obj.mode == 'EDIT': 
+        bpy.ops.object.mode_set(mode='EDIT') 
+    else:
+        cons_print("Object already in EDIT mode")
     bm = bmesh.from_edit_mesh(me)
     # Deselect all vertices.
     for v in bm.verts: v.select = False
     # Return to object mode and update the mesh to the obeject.
     bm.select_flush_mode()   
     me.update()
-    bpy.ops.object.mode_set(mode='OBJECT') 
+    if set_to_object:
+        bpy.ops.object.mode_set(mode='OBJECT') 
 
 def join_objects(obj, joined_obj):
     """Join two objects without changing the selection"""
@@ -919,6 +923,7 @@ class MESH_OT_create_basal(bpy.types.Operator):
         """Values aus Daniel 0,-4,50.5 und 0,4,50.5"""
         _, matrices = mesh_create_basal_batch(context)
         translate_and_morph_batch(context, matrices)
+        translate_valves(context,matrices)
         return{'FINISHED'} 
 
 def mesh_create_basal_batch(context):
@@ -1206,48 +1211,111 @@ def select_only_inner_basal_vertices():
 
 def translate_mesh(context, obj, shift):
     if obj.mode == "EDIT":
-        cons_print("if")
         bm = bmesh.from_edit_mesh(obj.data)
         edbm = True
     else:
-        cons_print("else")
         bm = bmesh.new()
         bm.from_mesh(obj.data)
         edbm = False
     
-    cons_print(shift)
     for v in bm.verts:
         for i in range(len(v.co)):
             v.co[i] += shift[i]
-            
-    bm.to_mesh(obj.data)
+    
+    if not edbm:
+        bm.to_mesh(obj.data)
     obj.data.update()
     bpy.ops.Object.mode_set(mode="OBJECT")
     return True
-        
+
+def find_min_z(context,obj):
+    #FIND MIN
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.mode_set(mode='EDIT') 
+    
+    bm = bmesh.from_edit_mesh(obj.data)
+    edbm = True
+    min_z = 10000
+    
+    for v in bm.verts:
+        if v.co[2] <= min_z:
+            min_z = v.co[2]
+    
+    return min_z
+
 def translate_and_morph_batch(context, matrices):
     selected_objects = context.selected_objects
+    selected_objects_names = [obj.name for obj in selected_objects]
     pos_matrix_mitral = matrices[0]
     pos_matrix_aortic = matrices[1]
     bpy.ops.object.mode_set(mode='EDIT') 
     
-    """for ob in selected_objects:
-        also_select_lower_regions(ob)"""
+    for ob in selected_objects:
+        bpy.context.view_layer.objects.active = ob
+        also_select_lower_regions(ob)
      
-    ref = selected_objects[0]
+    #ref = selected_objects[0]
+    temp_name = selected_objects[0].name
     for i in range(1,len(selected_objects)):
         # This only works if the relative index of the selected objects matches the position matrix.
+        ref = bpy.data.objects.get(temp_name) # Takes the previous target and uses it as a reference
         ref_copy = copy_object(ref.name, ref.name + '_COPY')
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
         shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
         shift = shift_mitral + shift_aortic / 2
+        
         #bpy.ops.Object.mode_set(mode="EDIT")
+        z_shift = find_min_z(context, selected_objects[i]) - find_min_z(context, ref_copy)
+        shift[2] = z_shift
+        
+        bpy.ops.Object.mode_set(mode="OBJECT")
         translate_mesh(context,ref_copy, shift) # Shift
+        #bpy.ops.Object.mode_set(mode="EDIT")
         BvH_transform(ref_copy,selected_objects[i]) # Morph it
+        
         temp_name = selected_objects[i].name
-        #bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
-        #ref_copy.name = temp_name # Rename reference object
+        bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
+        #selected_objects[i].name = selected_objects[i].name + "_FALSE"
+        ref_copy.name = temp_name # Rename reference object
+    #bpy.ops.object.mode_set(mode='OBJECT')  
+
+def translate_valves(context, matrices):
+    selected_objects = context.selected_objects
+    pos_matrix_mitral = matrices[0]
+    pos_matrix_aortic = matrices[1]
+    #bpy.ops.object.mode_set(mode='EDIT') 
     
+    # Deselect everything and then shift only the valves w.r.t the position matrix
+    for i in range(1,len(selected_objects)):
+        obj = selected_objects[i]
+        if bpy.context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.context.view_layer.objects.active = obj
+        obj = bpy.context.view_layer.objects.active
+        obj.select_set(True)
+        
+        bpy.ops.object.mode_set(mode='EDIT') 
+        deselect_object_vertices(obj, False)
+        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
+        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
+        
+        # Select only aortic valve
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.vertex_group_set_active(group=str("AV"))
+        bpy.ops.object.vertex_group_select()
+        # Shift the aortic valve
+        shift_aortic_new = (shift_aortic - shift_mitral) / 2 # Aortic - (aortic + mitral) / 2 from previous step
+        translate_mesh(context,obj,shift_aortic_new)
+        
+        bpy.ops.object.mode_set(mode='EDIT') 
+        # Select only mitral valve
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.vertex_group_set_active(group=str("AV"))
+        bpy.ops.object.vertex_group_select()
+        # Shift the valve
+        shift_mitral_new = (shift_mitral - shift_aortic) / 2 # Same reasoning as before except flipped
+        translate_mesh(context,obj,shift_mitral_new)
+        
 class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
     """Connect apical and basal region of ventricle"""
     bl_idname = 'heart.connect_apical_and_basal'
@@ -1287,7 +1355,7 @@ def also_select_lower_regions(region):
         # Unhide current basal region and use it as active object.
         curr_basal.hide_set(False)
         curr_basal.select_set(True)
-        bpy.context.view_layer.objects.active = curr_basal
+         #bpy.context.view_layer.objects.active = curr_basal
         # Select only lower basal edge loop vertex group.
         #deselect_object_vertices(curr_basal)
         bpy.ops.object.mode_set(mode='EDIT')
@@ -1947,8 +2015,27 @@ class MESH_DEV_test(bpy.types.Operator):
 
 def test_function(context):
     """Empty test function"""
-    cons_print(f"Running test function")
+    scene = context.scene
+    view_layer = context.view_layer
+    selected_objects = context.selected_objects
+    
+    pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
+    pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
+    
+    temp_name = selected_objects[0].name
+    for i in range(1,len(selected_objects)):
+        source = ref = bpy.data.objects.get(temp_name)
+        source_copy = copy_object(source.name, source.name + '_COPY')
+        target = selected_objects[i]
+        shift = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
 
+        shift_shrinkwrap_topology(context, source_copy, target, shift) # Shifts and then shrinkwraps
+        
+        temp_name = selected_objects[i].name
+        bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
+        #selected_objects[i].name = selected_objects[i].name + "_FALSE"
+        source_copy.name = temp_name # Rename reference object
+    return True
 #-----
 
 #PANELS
@@ -2197,6 +2284,9 @@ class PANEL_Dev_tools(bpy.types.Panel):
         row = layout.row(align=True)
         row.operator('heart.plot_stl', text = "Show", icon = 'AXIS_FRONT')
         row.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
+        
+        row = layout.row(align=True)
+        row.operator('heart.test', text="TEST")
 
 #------
 
@@ -2760,11 +2850,45 @@ def BvH_transform(source,target):
             if loc:
                 v.co = source.matrix_world.inverted() @ loc
 
+def shift_shrinkwrap_topology_batch(context):
+    scene = context.scene
+    view_layer = context.view_layer
+    selected_objects = context.selected_objects
+    
+    pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
+    pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
+    
+    for i in range(1,len(selected_objects)):
+        source = selected_objects[i-1]
+        source_copy = copy_object(source.name, source.name + '_COPY')
+        target = selected_objects[i]
+        shift = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
+
+        shift_shrinkwrap_topology(context, source_copy, target, shift) # Shifts and then shrinkwraps
+        
+        bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
+        #selected_objects[i].name = selected_objects[i].name + "_FALSE"
+        ref_copy.name = temp_name # Rename reference object
+
+def shift_shrinkwrap_topology(context, source, target, shift):
+    """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
+    scene = context.scene
+    view_layer = context.view_layer
+    
+    # Shift the source to overlay one of the valves before shrinkwrapping
+    translate_mesh(context, source, shift)
+    
+    bpy.context.view_layer.objects.active = source
+    # Here we add modifiers to the copied object that makes it shrinkwrap around the target
+    modifier = source.modifiers.new(name="shrinkwrap", type='SHRINKWRAP')
+    modifier.target = target
+    modifier.wrap_method = 'PROJECT'
+
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 
     MESH_OT_Ventricle_Sort, MESH_OT_Quick_Recon, MESH_OT_remove_basal,
-    MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,
+    MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity
 ]
 
 dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, 
