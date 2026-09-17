@@ -923,7 +923,7 @@ class MESH_OT_create_basal(bpy.types.Operator):
     def execute(self, context):
         """Values aus Daniel 0,-4,50.5 und 0,4,50.5"""
         _, matrices = mesh_create_basal_batch(context)
-        shift_shrinkwrap_topology_batch(context, matrices)
+        #shift_shrinkwrap_topology_batch(context, matrices)
         #translate_and_morph_batch(context, matrices)
         #translate_valves(context,matrices)
         return{'FINISHED'} 
@@ -1327,7 +1327,7 @@ class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
         for name in finished_names:
             obj = bpy.data.objects.get(name)
             obj.select_set(True)
-        shift_shrinkwrap_topology_batch(context)
+        #shift_shrinkwrap_topology_batch(context)
         return {'FINISHED'} 
 
 def select_lower_regions(region):
@@ -2367,7 +2367,8 @@ class MESH_OT_export_ventricle(bpy.types.Operator):
         # ------------------------------------------------------------------
         # 1) Find ventricles only among the currently selected objects
         # ------------------------------------------------------------------
-        ventricles = find_ventricle_objects(original_selection)
+        #ventricles = find_ventricle_objects(original_selection)
+        ventricles = context.selected_objects
         if not ventricles:
             cons_print("Export ventricle: no ventricle_* meshes found in the current selection.")
             return {'CANCELLED'}
@@ -2829,6 +2830,9 @@ def BvH_transform(source,target):
             if loc:
                 v.co = source.matrix_world.inverted() @ loc
 
+def get_frame_number(elem):
+    return int(elem.split('_')[1])
+
 def shift_shrinkwrap_topology_batch(context,matrices=None):
     scene = context.scene
     view_layer = context.view_layer
@@ -2842,7 +2846,7 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         pos_matrix_aortic = matrices[1]
 
     selected_names = [obj.name for obj in selected_objects]
-    selected_names.sort()
+    selected_names = sorted(selected_names, key=get_frame_number)
     
     temp_name = selected_names[0]
     for i in range(1,len(selected_names)):
@@ -2851,13 +2855,13 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         target = bpy.data.objects.get(selected_names[i])
         shift = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
 
-        shift_shrinkwrap_topology(context, source_copy, target, shift) # Shifts and then shrinkwraps
+        shift_shrinkwrap_topology(context, source_copy, target, shift, shrinkwrap='PROJECT') # Shifts and then shrinkwraps
         
         temp_name = selected_names[i]
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
         source_copy.name = temp_name # Rename reference object
 
-def shift_shrinkwrap_topology(context, source, target, shift = None):
+def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT'):
     """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
     scene = context.scene
     view_layer = context.view_layer
@@ -2866,14 +2870,14 @@ def shift_shrinkwrap_topology(context, source, target, shift = None):
     if shift is not None:
         translate_mesh(context, source, shift)
 
-    #cons_print(f"Shrinkwrap from {source} to {target}")
+    cons_print(f"Shrinkwrap from {source} to {target}")
     
     bpy.context.view_layer.objects.active = source
     make_custom_group_to_morph(context,source)
     # Here we add modifiers to the copied object that makes it shrinkwrap around the target
     modifier = source.modifiers.new(name="shrinkwrap", type='SHRINKWRAP')
     modifier.target = target
-    modifier.wrap_method = 'PROJECT'
+    modifier.wrap_method = shrinkwrap
     modifier.vertex_group = 'body'
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
