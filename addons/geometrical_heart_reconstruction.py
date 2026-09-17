@@ -923,7 +923,7 @@ class MESH_OT_create_basal(bpy.types.Operator):
     def execute(self, context):
         """Values aus Daniel 0,-4,50.5 und 0,4,50.5"""
         _, matrices = mesh_create_basal_batch(context)
-        #shift_shrinkwrap_topology_batch(context, matrices)
+        shift_shrinkwrap_topology_batch(context, matrices)
         #translate_and_morph_batch(context, matrices)
         #translate_valves(context,matrices)
         return{'FINISHED'} 
