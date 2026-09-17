@@ -47,6 +47,9 @@ def cons_print(data):
                 override = {'window': window, 'screen': screen, 'area': area}
                 bpy.ops.console.scrollback_append(override, text=str(data), type="OUTPUT")   
 
+def get_frame_number(elem):
+    return int(elem.split('_')[1])
+
 def copy_object(input_name, output_name):
     """Copy object with given name"""
     src_obj = bpy.data.objects[input_name]
@@ -928,6 +931,9 @@ class MESH_OT_create_basal(bpy.types.Operator):
         #translate_valves(context,matrices)
         return{'FINISHED'} 
 
+def get_frame_number(elem):
+    return int(elem.split('_')[1])
+
 def mesh_create_basal_batch(context):
     if not context.selected_objects:
             cons_print("No elements selected.")
@@ -935,9 +941,15 @@ def mesh_create_basal_batch(context):
     selected_objects = context.selected_objects
     pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
     pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
-    for obj in selected_objects:
-        frame_id = obj.name[-1]
-        if not update_value_for_translation(context, int(frame_id), pos_matrix_mitral, pos_matrix_aortic): return{'CANCELLED'}
+
+    selected_names = [obj.name for obj in selected_objects]
+    selected_names = sorted(selected_names, key=get_frame_number)
+
+    #for obj in selected_objects:
+    for i in range(0,len(selected_names)):
+        obj = bpy.data.objects.get(selected_names[i])
+        #frame_id = obj.name[-1]
+        if not update_value_for_translation(context, i, pos_matrix_mitral, pos_matrix_aortic): return{'CANCELLED'}
         if not mesh_create_basal(context, [obj]): 
             cons_print("FAILED")
             return{'CANCELLED'}
@@ -1219,10 +1231,16 @@ def translate_mesh(context, obj, shift):
         bm = bmesh.new()
         bm.from_mesh(obj.data)
         edbm = False
-    
-    for v in bm.verts:
-        for i in range(len(v.co)):
-            v.co[i] += shift[i]
+
+    if not edbm:
+        for v in bm.verts:
+            for i in range(len(v.co)):
+                v.co[i] += shift[i]
+    else:
+        for v in bm.verts:
+            if v.select:
+                for i in range(len(v.co)):
+                    v.co[i] += shift[i]
     
     if not edbm:
         bm.to_mesh(obj.data)
@@ -2011,9 +2029,7 @@ def test_function(context):
     scene = context.scene
     view_layer = context.view_layer
     selected_objects = context.selected_objects
-    obj = selected_objects[0]
-    make_custom_group_to_morph(context,obj)
-    
+    translate_mesh(context, selected_objects[0], [1,1,1])
     return True
 #-----
 
@@ -2653,14 +2669,18 @@ class MESH_OT_store_ref_positions(bpy.types.Operator):
     def execute(self,context):
         scene = context.scene
         view_layer = context.view_layer
-        
+
+        selected_objects = context.selected_objects
+        selected_names = [obj.name for obj in selected_objects]
+        selected_names = sorted(selected_names, key=get_frame_number)
+
         mitral_ref_ID = context.scene.mitral_ref
         aortic_ref_ID = context.scene.aorta_ref
         mitral_relative_positions = []
         aortic_relative_positions = []
 
-        selected_objects = context.selected_objects
-        for obj in selected_objects:
+        for name in selected_names:
+            obj = bpy.data.objects.get(name)
             if obj.mode == 'EDIT':
                 bm = bmesh.from_edit_mesh(obj.data)
                 for v in bm.verts:
@@ -2854,6 +2874,7 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         source_copy = copy_object(source.name, source.name + '_COPY')
         target = bpy.data.objects.get(selected_names[i])
         shift = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
+        #shift = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
 
         shift_shrinkwrap_topology(context, source_copy, target, shift, shrinkwrap='PROJECT') # Shifts and then shrinkwraps
         
@@ -2879,6 +2900,7 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
     modifier.target = target
     modifier.wrap_method = shrinkwrap
     modifier.vertex_group = 'body'
+    #modifier.project_limit = 1
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
 def make_custom_group_to_morph(context,obj):
@@ -2894,7 +2916,7 @@ def make_custom_group_to_morph(context,obj):
     for v in obj.data.vertices:
         matching_group = True
         for g in v.groups:
-            if g.group in [0,3,6]:
+            if g.group in [3,6]:
                 matching_group = False
                 break
         if matching_group:
