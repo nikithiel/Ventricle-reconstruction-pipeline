@@ -1223,7 +1223,16 @@ def select_only_inner_basal_vertices():
     bpy.ops.object.vertex_group_deselect()
     bpy.ops.object.mode_set(mode='OBJECT') 
 
-def translate_mesh(context, obj, shift):
+def translate_mesh(context, obj, shift, group=None):
+    if group is not None: # A vertex group is specified, we only shift vertices in this group. The group has to be inputted as string
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.Object.mode_set(mode="EDIT")
+        #deselect_object_vertices(obj)
+        bpy.ops.mesh.select_all( action = 'DESELECT' )
+        #obj.vertex_groups.active = obj.vertex_groups[group]
+        bpy.ops.object.vertex_group_set_active(group=str("MV"))
+        bpy.ops.object.vertex_group_select()
+
     if obj.mode == "EDIT":
         bm = bmesh.from_edit_mesh(obj.data)
         edbm = True
@@ -2029,7 +2038,8 @@ def test_function(context):
     scene = context.scene
     view_layer = context.view_layer
     selected_objects = context.selected_objects
-    translate_mesh(context, selected_objects[0], [1,1,1])
+    bpy.context.view_layer.objects.active = selected_objects[0]
+    translate_mesh(context, obj=selected_objects[0], shift=[1,1,1], group=6)
     return True
 #-----
 
