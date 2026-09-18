@@ -1225,12 +1225,11 @@ def select_only_inner_basal_vertices():
 
 def translate_mesh(context, obj, shift, group=None):
     if group is not None: # A vertex group is specified, we only shift vertices in this group. The group has to be inputted as string
-        bpy.context.view_layer.objects.active = obj
         bpy.ops.Object.mode_set(mode="EDIT")
         #deselect_object_vertices(obj)
         bpy.ops.mesh.select_all( action = 'DESELECT' )
         #obj.vertex_groups.active = obj.vertex_groups[group]
-        bpy.ops.object.vertex_group_set_active(group=str("MV"))
+        bpy.ops.object.vertex_group_set_active(group=group)
         bpy.ops.object.vertex_group_select()
 
     if obj.mode == "EDIT":
@@ -1306,7 +1305,6 @@ def translate_and_morph_batch(context, matrices):
         bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
         #selected_objects[i].name = selected_objects[i].name + "_FALSE"
         ref_copy.name = temp_name # Rename reference object
-    #bpy.ops.object.mode_set(mode='OBJECT')  
 
 def translate_valves(context, matrices):
     selected_objects = context.selected_objects
@@ -2039,7 +2037,7 @@ def test_function(context):
     view_layer = context.view_layer
     selected_objects = context.selected_objects
     bpy.context.view_layer.objects.active = selected_objects[0]
-    translate_mesh(context, obj=selected_objects[0], shift=[1,1,1], group=6)
+    translate_mesh(context, obj=selected_objects[0], shift=[0,0,1], group="MV")
     return True
 #-----
 
@@ -2883,10 +2881,11 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         source = bpy.data.objects.get(temp_name)
         source_copy = copy_object(source.name, source.name + '_COPY')
         target = bpy.data.objects.get(selected_names[i])
-        shift = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
-        #shift = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
+        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
+        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
 
-        shift_shrinkwrap_topology(context, source_copy, target, shift, shrinkwrap='PROJECT') # Shifts and then shrinkwraps
+        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT') # Shifts and then shrinkwraps
+        translate_mesh(context,target,shift=shift_mitral - shift_aortic, group="MV")
         
         temp_name = selected_names[i]
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
@@ -2900,8 +2899,6 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
     # Shift the source to overlay one of the valves before shrinkwrapping
     if shift is not None:
         translate_mesh(context, source, shift)
-
-    cons_print(f"Shrinkwrap from {source} to {target}")
     
     bpy.context.view_layer.objects.active = source
     make_custom_group_to_morph(context,source)
