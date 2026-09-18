@@ -37,11 +37,12 @@ import subprocess
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'ensurepip'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'numba'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'scipy'])
-subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'open3d'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'open3d==0.19.0'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'matplotlib'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'PyQt5'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'trimesh'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'pandas'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'pycpd'])
 ```
 If pip is missing (Output 0 in Blender Python console):
 ```bash
@@ -50,11 +51,12 @@ ensurepip.bootstrap()
 from pip._internal import main
 main(args=['install','numba'])
 main(args=['install','scipy'])
-main(args=['install','open3d'])
+main(args=['install','open3d==0.19.0'])
 main(args=['install','matplotlib'])
 main(args=['install','PyQt5'])
 main(args=['install','trimesh'])
 main(args=['install','pandas'])
+main(args=['install','pycpd'])
 ```
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:
