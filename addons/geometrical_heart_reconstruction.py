@@ -2035,9 +2035,7 @@ def test_function(context):
     """Empty test function"""
     scene = context.scene
     view_layer = context.view_layer
-    selected_objects = context.selected_objects
-    bpy.context.view_layer.objects.active = selected_objects[0]
-    translate_mesh(context, obj=selected_objects[0], shift=[0,0,1], group="MV")
+    mesh_create_basal_batch(context)
     return True
 #-----
 
@@ -2885,7 +2883,7 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
 
         shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT') # Shifts and then shrinkwraps
-        translate_mesh(context,target,shift=shift_mitral - shift_aortic, group="MV")
+        translate_mesh(context,source_copy,shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position 
         
         temp_name = selected_names[i]
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
@@ -2898,7 +2896,7 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
 
     # Shift the source to overlay one of the valves before shrinkwrapping
     if shift is not None:
-        translate_mesh(context, source, shift)
+        translate_mesh(context, source, shift, group=None)
     
     bpy.context.view_layer.objects.active = source
     make_custom_group_to_morph(context,source)
@@ -2915,6 +2913,7 @@ def make_custom_group_to_morph(context,obj):
     scene = context.scene
     view_layer = context.view_layer
     bpy.context.view_layer.objects.active = obj
+    exclude_group = [0,3,6]
 
     bpy.ops.Object.mode_set(mode="OBJECT")
     group = obj.vertex_groups.new(name='body')
@@ -2923,7 +2922,7 @@ def make_custom_group_to_morph(context,obj):
     for v in obj.data.vertices:
         matching_group = True
         for g in v.groups:
-            if g.group in [3,6]:
+            if g.group in exclude_group:
                 matching_group = False
                 break
         if matching_group:
