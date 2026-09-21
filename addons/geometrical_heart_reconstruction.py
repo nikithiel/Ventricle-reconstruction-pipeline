@@ -1,5 +1,5 @@
 bl_info = {
-    "name" : "Geometrical heart reconstrucion", 
+    "name" : "Geometrical heart reconstruction", 
     "author" : "Daniel Verhuelsdonk",
     "version" : (2, 1),
     "blender" : (3, 1, 0),
@@ -110,6 +110,19 @@ def transfer_data_to_mesh(obj):
     bm.from_mesh(obj.data)
     bm.faces.ensure_lookup_table()
     return bm
+
+def smooth_vertex_group(obj ,group, factor=0.5, iter=3):
+    bpy.context.view_layer.objects.active = obj
+    deselect_object_vertices(obj)
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.object.vertex_group_set_active(group=group)
+    bpy.ops.object.vertex_group_select()
+    n_smooth_iter = iter
+    for i in range(n_smooth_iter): 
+        bpy.ops.mesh.vertices_smooth(factor=factor, repeat=n_smooth_iter+1-i)
+        #bpy.ops.mesh.select_more()
+        #bpy.ops.object.vertex_group_deselect()
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 def get_value(self):
     return "//"
@@ -930,9 +943,6 @@ class MESH_OT_create_basal(bpy.types.Operator):
         #translate_and_morph_batch(context, matrices)
         #translate_valves(context,matrices)
         return{'FINISHED'} 
-
-def get_frame_number(elem):
-    return int(elem.split('_')[1])
 
 def mesh_create_basal_batch(context):
     if not context.selected_objects:
@@ -2035,7 +2045,13 @@ def test_function(context):
     """Empty test function"""
     scene = context.scene
     view_layer = context.view_layer
-    mesh_create_basal_batch(context)
+    selected_objects = context.selected_objects
+    #mesh_create_basal_batch(context)
+    #cons_print(compareMeshes(selected_objects[0], selected_objects[1]))
+    #morph_topology(context)
+    #BvH_transform(source=selected_objects[0], target=selected_objects[1])
+    #selected_objects[0].data.update
+    smooth_vertex_group(selected_objects[0],'body')
     return True
 #-----
 
@@ -2844,22 +2860,30 @@ def CPD_transform(source,target):
         source.data.vertices[i].co = mathutils.Vector(TY[i])
     source.data.update()
 
-def BvH_transform(source,target):
+def BvH_transform(source,target, partial= False):
     bvh = BVHTree.FromObject(target, bpy.context.evaluated_depsgraph_get())
     
     for v in source.data.vertices:
-        if v.select:
-            world_co = source.matrix_world @ v.co
+        if partial: # Only morphs the selected vertices
+            if v.select: 
+                world_co = source.matrix_world @ v.co
 
+                loc, _, _, _ = bvh.find_nearest(world_co)
+
+                if loc:
+                    v.co = source.matrix_world.inverted() @ loc
+        else:
+            world_co = source.matrix_world @ v.co
+            
             loc, _, _, _ = bvh.find_nearest(world_co)
 
             if loc:
                 v.co = source.matrix_world.inverted() @ loc
 
-def get_frame_number(elem):
-    return int(elem.split('_')[1])
-
 def shift_shrinkwrap_topology_batch(context,matrices=None):
+    """
+    Wrapper function to perform shift and shrinkwrap. Matrices are for tracking the absolute movement of the valves
+    """
     scene = context.scene
     view_layer = context.view_layer
     selected_objects = context.selected_objects
@@ -2882,8 +2906,11 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
 
-        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT') # Shifts and then shrinkwraps
-        translate_mesh(context,source_copy,shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position 
+        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT') # Shifts and then shrinkwraps 
+        translate_mesh(context,source_copy,shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position
+        select_lower_regions(source_copy)
+        BvH_transform(source_copy,target,partial=True)
+        smooth_vertex_group(source_copy,'body')
         
         temp_name = selected_names[i]
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
@@ -2899,7 +2926,7 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
         translate_mesh(context, source, shift, group=None)
     
     bpy.context.view_layer.objects.active = source
-    make_custom_group_to_morph(context,source)
+    make_custom_group_to_morph(context,source, exclude_groups=[0,3,6]) # 0 lower loop, 3 mitral, 6 aortic. [3,6] to pick everything except valves
     # Here we add modifiers to the copied object that makes it shrinkwrap around the target
     modifier = source.modifiers.new(name="shrinkwrap", type='SHRINKWRAP')
     modifier.target = target
@@ -2908,12 +2935,15 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
     #modifier.project_limit = 1
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
-def make_custom_group_to_morph(context,obj):
-    """Function that adds a new group which only includes vertices that are not the valves and lower loop"""
+def make_custom_group_to_morph(context,obj, exclude_groups=[0,3,6]):
+    """
+    Function that adds a new group which only includes vertices that are not the valves and lower loop
+    The group index are 0 for lower basal loop, 3 for mitral valve and 6 for aortic valve
+    """
     scene = context.scene
     view_layer = context.view_layer
     bpy.context.view_layer.objects.active = obj
-    exclude_group = [0,3,6]
+    exclude_group = exclude_groups #[0,3,6]
 
     bpy.ops.Object.mode_set(mode="OBJECT")
     group = obj.vertex_groups.new(name='body')
@@ -2931,6 +2961,42 @@ def make_custom_group_to_morph(context,obj):
     group.add(v_indices, 1,'REPLACE')
     
     return True
+
+def compareMeshes(mesh1, mesh2):
+    bmesh1 = bmesh.from_edit_mesh(mesh1.data)
+    bmesh2 = bmesh.from_edit_mesh(mesh2.data)
+    if (len(bmesh1.verts) != len(bmesh2.verts)):
+        return f"Inequal amount of vertices. Between {len(bmesh1.verts)} and {len(bmesh2.verts)}"
+    if (len(bmesh1.edges) != len(bmesh2.edges)):
+        return "Inequal amount of edges"
+    if (len(bmesh1.faces) != len(bmesh2.faces)):
+        return "Inequal amount of faces"
+    #for each face, if the same verts make up the face
+    for i in range(0, len(bmesh1.faces)):
+        bmesh1faceVertsList = []
+        bmesh2faceVertsList = []
+        for vert in bmesh1.faces[i].verts:
+            bmesh1faceVertsList.append(vert.index)
+        for vert in bmesh2.faces[i].verts:
+            bmesh2faceVertsList.append(vert.index)
+        bmesh1faceVertsList.sort()
+        bmesh2faceVertsList.sort()
+        if (bmesh1faceVertsList != bmesh2faceVertsList):
+            return "Mismatching vertex on a face"
+    #for each edge, if the same verts make up the edge
+    for i in range(0, len(bmesh1.edges)):
+        bmesh1edgeVertsList = []
+        bmesh2edgeVertsList = []
+        for vert in bmesh1.edges[i].verts:
+            bmesh1faceVertsList.append(vert.index)
+        for vert in bmesh2.edges[i].verts:
+            bmesh2faceVertsList.append(vert.index)
+        bmesh1edgeVertsList.sort()
+        bmesh2edgeVertsList.sort()
+        if (bmesh1edgeVertsList != bmesh2edgeVertsList):
+            return "Mismatching vertex on an edge"
+    #if we make it through all the checks, we have a match!
+    return "It matches!"
     
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
