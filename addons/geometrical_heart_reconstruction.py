@@ -2047,6 +2047,8 @@ def test_function(context):
     view_layer = context.view_layer
     selected_objects = context.selected_objects
     mesh_create_basal_batch(context)
+    #translate_mesh(context,selected_objects[0],shift=[0,0,-1], group="lower_basal_edge_loop")
+    #cons_print(get_lowest_vertex(selected_objects[0]))
     #cons_print(compareMeshes(selected_objects[0], selected_objects[1]))
     #morph_topology(context)
     #BvH_transform(source=selected_objects[0], target=selected_objects[1])
@@ -2729,6 +2731,48 @@ class MESH_OT_store_ref_positions(bpy.types.Operator):
 
 # Look for names ending in "_<digits>", e.g. "..._0", "..._00", "..._123"
 VENTRICLE_SUFFIX_RE = re.compile(r"_(\d+)$")
+def get_min_max_x(obj):
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+
+    min_x = 1000
+    for v in bm.verts:
+        if min_x > v.co[0]:
+            min_x = v.co[0]
+
+    max_x = -1000
+    for v in bm.verts:
+        if max_x < v.co[0]:
+            max_x = v.co[0]
+
+    return (min_x, max_x)
+
+def get_min_y(obj):
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+
+    min_y = 1000
+    for v in bm.verts:
+        if min_y > v.co[1]:
+            min_y = v.co[1]
+
+    max_y = -1000
+    for v in bm.verts:
+        if max_y < v.co[1]:
+            max_y = v.co[1]
+
+    return (min_y, max_y)
+
+def get_min_z(obj):
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+
+    min_z = 1000
+    for v in bm.verts:
+        if min_z > v.co[2]:
+            min_z = v.co[2]
+
+    return min_z
 
 def get_ventricle_index_from_name(name: str):
     """
@@ -2860,133 +2904,6 @@ def CPD_transform(source,target):
         source.data.vertices[i].co = mathutils.Vector(TY[i])
     source.data.update()
 
-def BvH_partial_transform(source, target, source_group= None, partial= False):
-    if source_group:
-        source_vg = source.vertex_groups.get(source_group)
-
-        if source_vg is None:
-            raise ValueError(
-                f"Source vertex group '{source_group}' does not exist."
-            )
-
-        source_indices = {
-            v.index
-            for v in source.data.vertices
-            if any(
-                g.group == source_vg.index and g.weight > threshold
-                for g in v.groups
-            )
-        }
-
-    else:
-        source_indices = {
-            v.index for v in source.data.vertices
-        }
-    
-    target_vg = None
-
-    if target_group:
-        target_vg = target.vertex_groups.get(target_group)
-
-        if target_vg is None:
-            raise ValueError(
-                f"Target vertex group '{target_group}' does not exist."
-            )
-    
-    depsgraph = bpy.context.evaluated_depsgraph_get()
-    target_eval = target.evaluated_get(depsgraph)
-
-    mesh = target_eval.to_mesh()
-
-    try:
-
-        # -----------------------------------------------------
-        # Determine which target faces belong to the group
-        # -----------------------------------------------------
-
-        if target_vg:
-
-            allowed_vertices = set()
-
-            for v in mesh.vertices:
-                for g in v.groups:
-                    if (
-                        g.group == target_vg.index
-                        and g.weight > threshold
-                    ):
-                        allowed_vertices.add(v.index)
-                        break
-
-            faces = [
-                poly
-                for poly in mesh.polygons
-                if all(
-                    vert_index in allowed_vertices
-                    for vert_index in poly.vertices
-                )
-            ]
-
-        else:
-            faces = list(mesh.polygons)
-            
-        target_matrix = target.matrix_world
-
-        vertices = [
-            target_matrix @ v.co
-            for v in mesh.vertices
-        ]
-
-        triangles = []
-
-        for poly in faces:
-
-            # BVH requires triangles.
-            if len(poly.vertices) < 3:
-                continue
-
-            # Fan triangulation for n-gons.
-            for i in range(1, len(poly.vertices) - 1):
-
-                triangles.append((
-                    vertices[poly.vertices[0]],
-                    vertices[poly.vertices[i]],
-                    vertices[poly.vertices[i + 1]],
-                ))
-
-        if not triangles:
-            raise ValueError(
-                "Target vertex group does not contain any usable faces."
-            )
-
-        bvh = BVHTree.FromPolygons(
-            vertices=[
-                co
-                for tri in triangles
-                for co in tri
-            ],
-            polygons=[
-                (i * 3, i * 3 + 1, i * 3 + 2)
-                for i in range(len(triangles))
-            ]
-        )
-        
-        source_inverse = source.matrix_world.inverted()
-
-        for vertex_index in source_indices:
-
-            v = source.data.vertices[vertex_index]
-
-            world_co = source.matrix_world @ v.co
-
-            loc, normal, index, distance = bvh.find_nearest(world_co)
-
-            if loc is not None:
-
-                v.co = source_inverse @ loc
-
-    finally:
-        target_eval.to_mesh_clear()
-
 def BvH_transform(source, target, group= None, partial= False):
     bvh = BVHTree.FromObject(target, bpy.context.evaluated_depsgraph_get())
     
@@ -3033,17 +2950,26 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
 
-        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT') # Shifts and then shrinkwraps 
-        translate_mesh(context,source_copy,shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position
-        select_lower_regions(source_copy)
-        BvH_transform(source_copy,target,partial=True)
-        smooth_vertex_group(source_copy,'body')
+        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps 
+        translate_mesh(context, source_copy,shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position
+
+        ll_x_shift = get_min_max_x(target)[1] + get_min_max_x(target)[0] - get_min_max_x(source_copy)[1] - get_min_max_x(source_copy)[0]
+        ll_y_shift = get_min_max_y(target)[1] + get_min_max_y(target)[0] - get_min_max_y(source_copy)[1] - get_min_max_y(source_copy)[0]
+        ll_z_shift = get_min_z(target) - get_min_z(source_copy)
+        lower_loop_shift = [ll_x_shift, ll_y_shift, ll_z_shift] # Calcs the difference between the lowest points between source and target
+        translate_mesh(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop') # Shifts only the lower edge loop according to above line
+        shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='NEAREST_SURFACEPOINT', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
+        
+        #select_lower_regions(source_copy)
+        #BvH_transform(source_copy,target,partial=True)
+
+        smooth_vertex_group(source_copy,'body', factor=0.5, iter=5)
         
         temp_name = selected_names[i]
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
         source_copy.name = temp_name # Rename reference object
 
-def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT'):
+def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body'):
     """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
     scene = context.scene
     view_layer = context.view_layer
@@ -3058,7 +2984,7 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
     modifier = source.modifiers.new(name="shrinkwrap", type='SHRINKWRAP')
     modifier.target = target
     modifier.wrap_method = shrinkwrap
-    modifier.vertex_group = 'body'
+    modifier.vertex_group = group
     #modifier.project_limit = 1
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
