@@ -2046,12 +2046,12 @@ def test_function(context):
     scene = context.scene
     view_layer = context.view_layer
     selected_objects = context.selected_objects
-    #mesh_create_basal_batch(context)
+    mesh_create_basal_batch(context)
     #cons_print(compareMeshes(selected_objects[0], selected_objects[1]))
     #morph_topology(context)
     #BvH_transform(source=selected_objects[0], target=selected_objects[1])
     #selected_objects[0].data.update
-    smooth_vertex_group(selected_objects[0],'body')
+    #smooth_vertex_group(selected_objects[0],'body')
     return True
 #-----
 
@@ -2860,7 +2860,134 @@ def CPD_transform(source,target):
         source.data.vertices[i].co = mathutils.Vector(TY[i])
     source.data.update()
 
-def BvH_transform(source,target, partial= False):
+def BvH_partial_transform(source, target, source_group= None, partial= False):
+    if source_group:
+        source_vg = source.vertex_groups.get(source_group)
+
+        if source_vg is None:
+            raise ValueError(
+                f"Source vertex group '{source_group}' does not exist."
+            )
+
+        source_indices = {
+            v.index
+            for v in source.data.vertices
+            if any(
+                g.group == source_vg.index and g.weight > threshold
+                for g in v.groups
+            )
+        }
+
+    else:
+        source_indices = {
+            v.index for v in source.data.vertices
+        }
+    
+    target_vg = None
+
+    if target_group:
+        target_vg = target.vertex_groups.get(target_group)
+
+        if target_vg is None:
+            raise ValueError(
+                f"Target vertex group '{target_group}' does not exist."
+            )
+    
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    target_eval = target.evaluated_get(depsgraph)
+
+    mesh = target_eval.to_mesh()
+
+    try:
+
+        # -----------------------------------------------------
+        # Determine which target faces belong to the group
+        # -----------------------------------------------------
+
+        if target_vg:
+
+            allowed_vertices = set()
+
+            for v in mesh.vertices:
+                for g in v.groups:
+                    if (
+                        g.group == target_vg.index
+                        and g.weight > threshold
+                    ):
+                        allowed_vertices.add(v.index)
+                        break
+
+            faces = [
+                poly
+                for poly in mesh.polygons
+                if all(
+                    vert_index in allowed_vertices
+                    for vert_index in poly.vertices
+                )
+            ]
+
+        else:
+            faces = list(mesh.polygons)
+            
+        target_matrix = target.matrix_world
+
+        vertices = [
+            target_matrix @ v.co
+            for v in mesh.vertices
+        ]
+
+        triangles = []
+
+        for poly in faces:
+
+            # BVH requires triangles.
+            if len(poly.vertices) < 3:
+                continue
+
+            # Fan triangulation for n-gons.
+            for i in range(1, len(poly.vertices) - 1):
+
+                triangles.append((
+                    vertices[poly.vertices[0]],
+                    vertices[poly.vertices[i]],
+                    vertices[poly.vertices[i + 1]],
+                ))
+
+        if not triangles:
+            raise ValueError(
+                "Target vertex group does not contain any usable faces."
+            )
+
+        bvh = BVHTree.FromPolygons(
+            vertices=[
+                co
+                for tri in triangles
+                for co in tri
+            ],
+            polygons=[
+                (i * 3, i * 3 + 1, i * 3 + 2)
+                for i in range(len(triangles))
+            ]
+        )
+        
+        source_inverse = source.matrix_world.inverted()
+
+        for vertex_index in source_indices:
+
+            v = source.data.vertices[vertex_index]
+
+            world_co = source.matrix_world @ v.co
+
+            loc, normal, index, distance = bvh.find_nearest(world_co)
+
+            if loc is not None:
+
+                v.co = source_inverse @ loc
+
+    finally:
+        target_eval.to_mesh_clear()
+
+def BvH_transform(source, target, group= None, partial= False):
     bvh = BVHTree.FromObject(target, bpy.context.evaluated_depsgraph_get())
     
     for v in source.data.vertices:
