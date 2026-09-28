@@ -17,6 +17,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import trimesh
 
+bl_info = {
+    "name": "Valve Diameter Calculation",
+    "author": "Joel Gestrich",
+    "version": (0,1,0),
+    "blender": (3,1,0)    
+}
+
 
 # -----------------------------
 # IO / parsing

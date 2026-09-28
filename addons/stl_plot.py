@@ -13,6 +13,13 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import pchip
 from scipy.interpolate import interp1d
 
+bl_info = {
+    "name": "STL Plotting",
+    "author": "Geno Jayadi",
+    "version": (0,1,0),
+    "blender": (3, 1, 0)    
+}
+
 # Borrowed from the other script
 def parseRunTimeVariables_unique(inputpath):
     runtimeTree = {}        

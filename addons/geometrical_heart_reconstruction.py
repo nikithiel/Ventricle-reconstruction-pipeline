@@ -111,17 +111,28 @@ def transfer_data_to_mesh(obj):
     bm.faces.ensure_lookup_table()
     return bm
 
-def smooth_vertex_group(obj ,group, factor=0.5, iter=3):
+def smooth_vertex_group(obj ,group, factor=0.5, iter=5, use_laplacian=False):
     bpy.context.view_layer.objects.active = obj
     deselect_object_vertices(obj)
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.object.vertex_group_set_active(group=group)
     bpy.ops.object.vertex_group_select()
-    n_smooth_iter = iter
-    for i in range(n_smooth_iter): 
-        bpy.ops.mesh.vertices_smooth(factor=factor, repeat=n_smooth_iter+1-i)
-        #bpy.ops.mesh.select_more()
-        #bpy.ops.object.vertex_group_deselect()
+
+    if use_laplacian:
+        bpy.ops.object.mode_set(mode='OBJECT')  
+        modifier = obj.modifiers.new(name="laplacian smooth", type='LAPLACIANSMOOTH')
+        modifier.iterations = iter 
+        modifier.lambda_factor = factor
+        modifier.lambda_border = 0
+        modifier.vertex_group = group
+        modifier.use_volume_preserve = True
+        bpy.ops.object.modifier_apply(modifier='laplacian smooth')
+    else:
+        for i in range(iter):
+            bpy.ops.mesh.vertices_smooth(factor=factor, repeat=iter+1-i)
+            #bpy.ops.mesh.vertices_smooth_laplacian(lambda_factor=factor,lambda_border=1,repeat=n_smooth_iter+1-i)
+            #bpy.ops.mesh.select_more()
+            #bpy.ops.object.vertex_group_deselect()
     bpy.ops.object.mode_set(mode='OBJECT')
 
 def get_value(self):
@@ -2203,13 +2214,19 @@ class PANEL_Setup_Variables(bpy.types.Panel):
         row = layout.row()
         layout.prop(context.scene, "inset_faces_refinement_steps", text="Refinement steps for insetting faces")
         row = layout.row()
-        row.label(text= "Connection smoothing variales") 
+        row.label(text= "Connection smoothing variables") 
         row = layout.row()
         layout.prop(context.scene, "max_con_sm_iter", text="Maximum smoothing iterations")
         row = layout.row()
         layout.prop(context.scene, "min_con_sm_iter", text="Minimum smoothing iterations")
         row = layout.row()
         layout.prop(context.scene, "sm_reps", text="Smoothing repetitions")
+        row = layout.row()
+        row.label(text= "Basal Smoothing Variables")
+        row = layout.row()
+        layout.prop(context.scene, "basal_sm_factor", text="Basal region smoothing factor")
+        row = layout.row()
+        layout.prop(context.scene, "basal_sm_iter", text="Basal region smoothing iterations")
       
 class PANEL_Pipeline(bpy.types.Panel):
     bl_label = "Geometric ventricle reconstruction pipeline"
@@ -2732,47 +2749,52 @@ class MESH_OT_store_ref_positions(bpy.types.Operator):
 # Look for names ending in "_<digits>", e.g. "..._0", "..._00", "..._123"
 VENTRICLE_SUFFIX_RE = re.compile(r"_(\d+)$")
 def get_min_max_x(obj):
-    bm = bmesh.new()
-    bm.from_mesh(obj.data)
+    #bm = bmesh.new()
+    #bm.from_mesh(obj.data)
 
     min_x = 1000
-    for v in bm.verts:
-        if min_x > v.co[0]:
+    for v in obj.data.vertices:
+        if min_x > v.co[0] and 0 in [g.group for g in v.groups]:
             min_x = v.co[0]
 
     max_x = -1000
-    for v in bm.verts:
-        if max_x < v.co[0]:
+    for v in obj.data.vertices:
+        if max_x < v.co[0] and 0 in [g.group for g in v.groups]:
             max_x = v.co[0]
 
     return (min_x, max_x)
 
-def get_min_y(obj):
+def get_min_max_y(obj):
     bm = bmesh.new()
     bm.from_mesh(obj.data)
 
     min_y = 1000
-    for v in bm.verts:
-        if min_y > v.co[1]:
+    for v in obj.data.vertices:
+        if min_y > v.co[1] and 0 in [g.group for g in v.groups]:
             min_y = v.co[1]
 
     max_y = -1000
-    for v in bm.verts:
-        if max_y < v.co[1]:
+    for v in obj.data.vertices:
+        if max_y < v.co[1] and 0 in [g.group for g in v.groups]:
             max_y = v.co[1]
 
     return (min_y, max_y)
 
-def get_min_z(obj):
+def get_min_max_z(obj):
     bm = bmesh.new()
     bm.from_mesh(obj.data)
 
     min_z = 1000
-    for v in bm.verts:
-        if min_z > v.co[2]:
+    for v in obj.data.vertices:
+        if min_z > v.co[2] and 0 in [g.group for g in v.groups]:
             min_z = v.co[2]
 
-    return min_z
+    max_z = -1000
+    for v in obj.data.vertices:
+        if max_z < v.co[2] and 0 in [g.group for g in v.groups]:
+            max_z < v.co[2]
+
+    return (min_z, max_z)
 
 def get_ventricle_index_from_name(name: str):
     """
@@ -2947,29 +2969,40 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         source = bpy.data.objects.get(temp_name)
         source_copy = copy_object(source.name, source.name + '_COPY')
         target = bpy.data.objects.get(selected_names[i])
+
+        # --- Shift and shrinkwrap the body part --- #
         shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
-
         shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps 
         translate_mesh(context, source_copy,shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position
 
+        # --- Shift and shrinkwrap only the lower edge loop --- #
         ll_x_shift = get_min_max_x(target)[1] + get_min_max_x(target)[0] - get_min_max_x(source_copy)[1] - get_min_max_x(source_copy)[0]
         ll_y_shift = get_min_max_y(target)[1] + get_min_max_y(target)[0] - get_min_max_y(source_copy)[1] - get_min_max_y(source_copy)[0]
-        ll_z_shift = get_min_z(target) - get_min_z(source_copy)
-        lower_loop_shift = [ll_x_shift, ll_y_shift, ll_z_shift] # Calcs the difference between the lowest points between source and target
-        translate_mesh(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop') # Shifts only the lower edge loop according to above line
-        shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='NEAREST_SURFACEPOINT', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
+        ll_z_shift = get_min_max_z(target)[1] + get_min_max_z(target)[0] - get_min_max_z(source_copy)[1] - get_min_max_z(source_copy)[0]
         
+        lower_loop_shift = [0.5 * ll_x_shift, 0.5* ll_y_shift, 0.5 * ll_z_shift] # Calcs the difference between the lowest points between source and target
+        translate_mesh(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop') # Shifts only the lower edge loop according to above line
+        shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='PROJECT', group='lower_basal_edge_loop', use_axis=[0,0,0]) # Performs shrinkwrap on the lower edge loop
+        shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='NEAREST_SURFACEPOINT', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
+
         #select_lower_regions(source_copy)
         #BvH_transform(source_copy,target,partial=True)
 
-        smooth_vertex_group(source_copy,'body', factor=0.5, iter=5)
+        #smooth_vertex_group(source_copy,'body', factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter)
         
         temp_name = selected_names[i]
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
         source_copy.name = temp_name # Rename reference object
+    
+    # Retroactive smoothing to avoid cascading recurring smoothing (WIP)
+    for name in selected_names: # All the resulting objects post transformation should still have the same name
+        obj = bpy.data.objects.get(name)
+        if name=='ventricle_0_basal': 
+            make_custom_group_to_morph(context,obj, exclude_groups=[0,3,6])
+        smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
 
-def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body'):
+def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body', use_axis=[0,0,0]):
     """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
     scene = context.scene
     view_layer = context.view_layer
@@ -2986,6 +3019,10 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
     modifier.wrap_method = shrinkwrap
     modifier.vertex_group = group
     #modifier.project_limit = 1
+    if shrinkwrap == 'PROJECT':
+        modifier.use_project_x = use_axis[0]
+        modifier.use_project_y = use_axis[1]
+        modifier.use_project_z = use_axis[2]
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
 def make_custom_group_to_morph(context,obj, exclude_groups=[0,3,6]):
@@ -3102,8 +3139,9 @@ def register():
     bpy.types.Scene.connection_twist = bpy.props.IntProperty(name="Twist for bridging algorithm in connection", default=0)
     bpy.types.Scene.max_con_sm_iter = bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min = 5)
     bpy.types.Scene.min_con_sm_iter = bpy.props.IntProperty(name="Minimum smoothing iterations for the smoothing of the connection between basal and apical region", default=2, min = 0)
-    bpy.types.Scene.sm_reps = bpy.props.IntProperty(name="Repitions of reselection and smoothing application when smoothing basal and apical region", default=3, min = 0)
-
+    bpy.types.Scene.sm_reps = bpy.props.IntProperty(name="Repetitions of reselection and smoothing application when smoothing basal and apical region", default=3, min = 0)
+    bpy.types.Scene.basal_sm_factor = bpy.props.FloatProperty(name="Basal Region Smoothing Factor", default=0.5)
+    bpy.types.Scene.basal_sm_iter = bpy.props.IntProperty(name="Basal Region Smoothing Iterations", default=5)
     # Import variables.
     bpy.types.Scene.ventricle_import_dir = bpy.props.StringProperty(
         name="Import folder",
