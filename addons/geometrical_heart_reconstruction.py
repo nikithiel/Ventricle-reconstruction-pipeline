@@ -112,6 +112,7 @@ def transfer_data_to_mesh(obj):
     return bm
 
 def smooth_vertex_group(obj ,group, factor=0.5, iter=5, use_laplacian=False):
+    """Applies either (laplacian) smoothing on an object's vertices that belonged to a group"""
     bpy.context.view_layer.objects.active = obj
     deselect_object_vertices(obj)
     bpy.ops.object.mode_set(mode='EDIT')
@@ -130,9 +131,6 @@ def smooth_vertex_group(obj ,group, factor=0.5, iter=5, use_laplacian=False):
     else:
         for i in range(iter):
             bpy.ops.mesh.vertices_smooth(factor=factor, repeat=iter+1-i)
-            #bpy.ops.mesh.vertices_smooth_laplacian(lambda_factor=factor,lambda_border=1,repeat=n_smooth_iter+1-i)
-            #bpy.ops.mesh.select_more()
-            #bpy.ops.object.vertex_group_deselect()
     bpy.ops.object.mode_set(mode='OBJECT')
 
 def get_value(self):
@@ -951,11 +949,10 @@ class MESH_OT_create_basal(bpy.types.Operator):
         """Values aus Daniel 0,-4,50.5 und 0,4,50.5"""
         _, matrices = mesh_create_basal_batch(context)
         shift_shrinkwrap_topology_batch(context, matrices)
-        #translate_and_morph_batch(context, matrices)
-        #translate_valves(context,matrices)
         return{'FINISHED'} 
 
 def mesh_create_basal_batch(context):
+    """Create basal region for each of the selected objects in batches"""
     if not context.selected_objects:
             cons_print("No elements selected.")
             return False
@@ -1245,6 +1242,7 @@ def select_only_inner_basal_vertices():
     bpy.ops.object.mode_set(mode='OBJECT') 
 
 def translate_mesh(context, obj, shift, group=None):
+    """Translates a mesh, if a group is given, then only translates the vertices of that mesh that belongs to that group"""
     if group is not None: # A vertex group is specified, we only shift vertices in this group. The group has to be inputted as string
         bpy.ops.Object.mode_set(mode="EDIT")
         #deselect_object_vertices(obj)
@@ -1326,44 +1324,6 @@ def translate_and_morph_batch(context, matrices):
         bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
         #selected_objects[i].name = selected_objects[i].name + "_FALSE"
         ref_copy.name = temp_name # Rename reference object
-
-def translate_valves(context, matrices):
-    selected_objects = context.selected_objects
-    pos_matrix_mitral = matrices[0]
-    pos_matrix_aortic = matrices[1]
-    #bpy.ops.object.mode_set(mode='EDIT') 
-    
-    # Deselect everything and then shift only the valves w.r.t the position matrix
-    for i in range(1,len(selected_objects)):
-        obj = selected_objects[i]
-        if bpy.context.mode != 'OBJECT':
-            bpy.ops.object.mode_set(mode='OBJECT')
-        bpy.context.view_layer.objects.active = obj
-        obj = bpy.context.view_layer.objects.active
-        obj.select_set(True)
-        
-        bpy.ops.object.mode_set(mode='EDIT') 
-        deselect_object_vertices(obj, False)
-        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
-        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
-        
-        # Select only aortic valve
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.vertex_group_set_active(group=str("AV"))
-        bpy.ops.object.vertex_group_select()
-        # Shift the aortic valve
-        shift_aortic_new = (shift_aortic - shift_mitral) / 2 # Aortic - (aortic + mitral) / 2 from previous step
-        translate_mesh(context,obj,shift_aortic_new)
-        
-        bpy.ops.object.mode_set(mode='EDIT') 
-        # Select only mitral valve
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.vertex_group_set_active(group=str("AV"))
-        bpy.ops.object.vertex_group_select()
-        # Shift the valve
-        shift_mitral_new = (shift_mitral - shift_aortic) / 2 # Same reasoning as before except flipped
-        translate_mesh(context,obj,shift_mitral_new)
-        
 class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
     """Connect apical and basal region of ventricle"""
     bl_idname = 'heart.connect_apical_and_basal'
@@ -2871,6 +2831,7 @@ class MESH_OT_object_transform(bpy.types.Operator):
         return{"FINISHED"}
 
 def morph_topology(context):
+    """Legacy morph topology function"""
     scene = context.scene
     view_layer = context.view_layer
 
@@ -2912,6 +2873,7 @@ def morph_topology(context):
     return True
     
 def CPD_transform(source,target):
+    """Legacy Coherent Point Drift morph function"""
     source_vert = []
     for v in source.data.vertices:
         source_vert.append(list(v.co[:]))
@@ -2927,6 +2889,7 @@ def CPD_transform(source,target):
     source.data.update()
 
 def BvH_transform(source, target, group= None, partial= False):
+    """Legacy morph function using BvH Trees"""
     bvh = BVHTree.FromObject(target, bpy.context.evaluated_depsgraph_get())
     
     for v in source.data.vertices:
