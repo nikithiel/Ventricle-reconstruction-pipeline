@@ -37,11 +37,12 @@ import subprocess
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'ensurepip'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'numba'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'scipy'])
-subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'open3d'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'open3d==0.19.0'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'matplotlib'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'PyQt5'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'trimesh'])
 subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'pandas'])
+subprocess.call([sys.exec_prefix + '\\bin\\python.exe', '-m', 'pip', 'install', 'pycpd'])
 ```
 If pip is missing (Output 0 in Blender Python console):
 ```bash
@@ -50,11 +51,12 @@ ensurepip.bootstrap()
 from pip._internal import main
 main(args=['install','numba'])
 main(args=['install','scipy'])
-main(args=['install','open3d'])
+main(args=['install','open3d==0.19.0'])
 main(args=['install','matplotlib'])
 main(args=['install','PyQt5'])
 main(args=['install','trimesh'])
 main(args=['install','pandas'])
+main(args=['install','pycpd'])
 ```
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:
@@ -114,9 +116,12 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     - Refinement steps for insetting faces: Amount of iterations of insetting faces during the connection algorithm
     - Maximum smoothing iterations: Used in smoothing the connection of basal and apical region. Highest (initial) smoothing value
     - Minimum smoothing iterations: Used in smoothing the connection of basal and apical region. Smallest smoothing value
+    - Smoothing repetitions: Used in smoothing the connection of basal and apical region. Amount of smoothing repetitions each with a wider node selection (all neighbours of previous selection are selected)
     - Smoothing repetitions: Used in smoothing the connection of basal and apical region. Amount of smoothing repetitions, each fading out over a wider band
     - Smoothing fade-out share of apical height: The connection smoothing acts at full strength on everything above the removal threshold and fades out below it, following a cosine. The fade-out height is this share of the distance from the threshold down to the apex, so it scales with the size of the ventricle. Larger values give a softer transition but smooth more of the apical measurement data (default 20 %)
     - Volume preserving smoothing iterations: Taubin smoothing of the whole ventricle except the valve discs, applied after the connection has been smoothed. It removes segmentation noise from the apical region, which the connection smoothing never reaches, without shrinking the volume. Set to 0 to disable it (default 10)
+    - Basal region smoothing factor: Used in the smoothing process of the basal region for both the normal smoothing and laplacian smoothing as the lambda factor
+    - Basal region smoothing iterations: How many iterations to be used during the smoothing process. If it's normal smoothing it's iterative cascading smoothing (performs n iterations and repeats for n-1 iterations until 0) and just one repeat for laplacian smoothing
 5. Select approach\
     5.1. In panel 'Geometric ventricle reconstrucion pipeline press button 'Select approach'\
     ![Image of the setup pipeline](/readme_images/Pipeline_button_five.png)\
@@ -124,7 +129,7 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     \
     Change the valve modeling approach.
 ## Run pipeline
-Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline' or do the following steps for a more comprehensive execution of the pipeline:\
+Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline', which simply just runs all the previous steps automaticall or do the following steps for a more comprehensive execution of the pipeline:\
 ![Image of the setup pipeline](/readme_images/Pipeline_optional.png)
 
 Every step triangulates the geometry it creates, so all reconstructed objects (ventricles, aorta, atrium, valve zones) are pure triangle meshes; the per-ventricle vertex count therefore rises slightly. The mitral and aortic valve discs stay untouched — same nodes, same faces — as they form the interface to atrium and aorta. **Quick reconstruction** checks the result at the end and aborts, naming the object and face in the System Console, if a non-triangular face remains or the frames stop sharing one topology. The four manual buttons triangulate too; only *Quick reconstruction* runs that final check.
@@ -133,13 +138,22 @@ Every step triangulates the geometry it creates, so all reconstructed objects (v
     1.1. Press button 'Remove basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
     This removes all vertices above the z-value for a reference ventricle. The vertices of the other ventricle object with identical indices to the deleted one in the reference are also deleted. The upper edge loop is smoothed such that all its vertices lay on the same xy-plane. Lastly the ventricle objects are shifted along the z-axis such that all xy-planes match with the reference ventricle xy-plane.
+
 2. Create basal region\
-    2.1. Press button 'Create basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
+    2.1. Select all the ventricles, for which basal regions are to be generated for\
+    2.2. Press button 'Create basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
-    This creates a reference basal region used the selected object. For that first the valve indices and a support structure are added to a copy of the reference ventricle. Then the Poisson surface reconstruction is applied to the vertices to create a surface object from all vertices. After that the object is remeshed and the apical region is removed while smoothing the lower edge loop of the resulting basal region. If multiple objects are selected, then a basal region will be created for each of the selected object, however, these basal regions will most likely not share the same topology. The button "Mesh Transformation" is required to remesh the objects to share the same topology.
+    This creates a reference basal region used the selected objects. For that first the valve indices and a support structure are added to a copy of the reference ventricle. Then the Poisson surface reconstruction is applied to the vertices to create a surface object from all vertices. After that the object is automatically remeshed and the apical region is removed while smoothing the lower edge loop of the resulting basal region. 
+    If multiple objects are selected, then a basal region will be created for each of the selected object, however, these basal regions will most likely not share the same topology. 
+    The generated basal region will automatically be selected.
+
 3. Connect basal and apical parts\
-    3.1. Press button 'Connect basal and apical regions' in the panel 'Geometric ventricle reconstruction pipeline'\
+    3.1 Select the basal regions to be connected with its' matching ventricle\
+    3.2. Press button 'Connect basal and apical regions' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
+    This connects every basal for all matching apical region ventricle objects and connects them with the looptools_bridge function from the Blender addon Looptools. Since this connection creates long quadrangular faces, the faces need to be split using an integrated insetting algorithm leading to faces where the deviation of edge lengths are reduced. After that the faces are triangulated and iteratively smoothed. These processes are done for every basal and apical region ventricle objects.
+    In this process, the valve connection is always at a fixed position, therefore no selection is necessary for the next step.
+
     This creates a copy of the reference basal region for all apical region ventricle objects and connects them with the looptools_bridge function from the Blender addon Looptools. Since this connection creates long quadrangular faces, the faces need to be split using an integrated insetting algorithm leading to faces where the deviation of edge lengths are reduced. After that the faces are triangulated and iteratively smoothed. These processes are done for the reference ventricle object first and then copied to the other ventricles to remain node-connectivity.\
     \
     The smoothing works on weights rather than on a node selection. Every node above the removal threshold is smoothed at full strength, below it the strength fades out with a cosine (see 'Smoothing fade-out share of apical height'). A hard selection border would leave a heavily smoothed node next to an untouched one and visibly kink the surface. The nodes of the mitral and aortic valve discs are pinned and never move. Finally the whole ventricle, again except the valve discs, is relaxed with a volume preserving Taubin pass.
