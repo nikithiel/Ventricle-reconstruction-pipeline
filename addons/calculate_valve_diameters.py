@@ -29,6 +29,22 @@ bl_info = {
 # IO / parsing
 # -----------------------------
 
+class ValveInputError(RuntimeError):
+    """Inputs for the valve-diameter calculation are missing or malformed.
+
+    Carries `errors`, a list of human-readable problems, so callers can render a
+    bullet list. Kept distinct from unexpected exceptions so the Blender operator
+    can show an actionable message for bad user data while genuine bugs still
+    surface as a normal traceback.
+    """
+
+    def __init__(self, errors: List[str],
+                 summary: str = "Valve-diameter inputs are invalid") -> None:
+        self.errors: List[str] = list(errors)
+        self.summary: str = summary
+        super().__init__(f"{summary}:\n" + "\n".join("- " + e for e in self.errors))
+
+
 def parse_inputpython_txt(path: Path) -> Dict[str, object]:
     """
     Parses lines: key value
@@ -95,46 +111,130 @@ def read_velocity_csv(path: Path) -> pd.DataFrame:
     return df
 
 
+# Captures the LAST run of digits at the end of the name, allowing trailing
+# non-digits such as a ')' before '.stl'. Any prefix (case id, date like
+# 3.29.22, anatomy label, ...) is ignored -- only the final frame number counts.
+_STL_INDEX_RE = re.compile(r"(\d+)[^\d]*\.stl$", re.IGNORECASE)
+
+
 def stl_index_from_name(name: str) -> Optional[int]:
-    # expects ventricle_<idx>.stl
-    m = re.search(r"^ventricle_(\d+)\.stl$", name.lower())
+    """
+    Return the phase index encoded at the END of an STL filename, ignoring the
+    prefix. It is the last digit run before '.stl' (trailing non-digits like a
+    ')' are allowed):
+
+        'ventricle_7.stl'                             -> 7
+        'CP RA 3.29.22_BeutelRevision+LVOT_000.stl'   -> 0
+        'CP SJ 12.27.22_BeutelRevision+LVOT_042.stl'  -> 42
+        'NJ 1.11 (1).stl'                             -> 1
+
+    Leading zeros are fine (int() strips them). Returns None when there is no
+    trailing number (e.g. 'aorta_static.stl'), so such files are skipped.
+    """
+    m = _STL_INDEX_RE.search(name)
     return int(m.group(1)) if m else None
 
 
-def compute_volume_vs_phase_from_stl(stl_dir: Path) -> pd.DataFrame:
+def stl_series_prefix(name: str) -> Optional[str]:
     """
-    Reads ONLY ventricle_*.stl, computes volume and phase phi in [0,1].
+    Everything before the trailing numeric index. Used to group frames that
+    belong to the same series so a folder may also hold unrelated meshes.
+    Returns None when there is no trailing number.
+    """
+    m = _STL_INDEX_RE.search(name)
+    return name[: m.start(1)] if m else None
+
+
+def discover_phase_stls(stl_dir: Path, pattern: Optional[str] = None) -> List[Tuple[int, Path]]:
+    """
+    Find the ventricle phase STL series in `stl_dir`, robust to naming.
+
+    Any file ending in '<digits>.stl' (any case) is a candidate frame.
+    Candidates are grouped by the text preceding those digits (the 'series
+    prefix'), so the folder is allowed to contain unrelated meshes too. If more
+    than one series is present, the longest one is used (preferring a series
+    that starts at index 0) and a warning names what was skipped.
+
+    Pass `pattern` (a glob such as '*LVOT_*.stl') to restrict the search
+    explicitly if auto-detection ever picks the wrong series.
+
+    Returns [(index, path), ...] sorted by index, with duplicate indices dropped.
+    """
+    files_iter = stl_dir.glob(pattern) if pattern else stl_dir.iterdir()
+
+    series: Dict[str, List[Tuple[int, Path]]] = {}
+    for f in files_iter:
+        if not f.is_file():
+            continue
+        idx = stl_index_from_name(f.name)
+        if idx is None:
+            continue
+        series.setdefault(stl_series_prefix(f.name), []).append((idx, f))
+
+    if not series:
+        raise FileNotFoundError(
+            f"No numbered STL frames (e.g. '..._000.stl') found in: {stl_dir}"
+        )
+
+    # Prefer the longest series; break ties toward one that starts at index 0,
+    # then by prefix name so the choice is deterministic.
+    def series_key(prefix: str) -> Tuple[int, bool, str]:
+        idxs = [i for i, _ in series[prefix]]
+        return (len(series[prefix]), min(idxs) == 0, prefix)
+
+    chosen = max(series, key=series_key)
+    if len(series) > 1:
+        skipped = sorted(p for p in series if p != chosen)
+        warnings.warn(
+            f"Multiple STL series in {stl_dir}: {sorted(series)!r}. "
+            f"Using prefix {chosen!r} ({len(series[chosen])} frames); "
+            f"ignoring {skipped!r}. Pass `pattern=...` to override."
+        )
+
+    # De-duplicate indices (keep first seen), then sort by index.
+    by_idx: Dict[int, Path] = {}
+    for idx, f in series[chosen]:
+        if idx in by_idx:
+            warnings.warn(
+                f"Duplicate phase index {idx} in {stl_dir}: keeping "
+                f"'{by_idx[idx].name}', ignoring '{f.name}'."
+            )
+            continue
+        by_idx[idx] = f
+
+    return sorted(by_idx.items())
+
+
+def compute_volume_vs_phase_from_stl(stl_dir: Path, pattern: Optional[str] = None) -> pd.DataFrame:
+    """
+    Reads the ventricle phase STL series, computes volume and phase phi in [0,1].
+
+    Filenames are auto-detected via discover_phase_stls, so both the legacy
+    'ventricle_<idx>.stl' and arbitrary '<prefix>_<idx>.stl' (e.g.
+    'CP RA 3.29.22_BeutelRevision+LVOT_000.stl') work with no code changes.
+    Pass `pattern` to force a specific glob if needed.
+
     Time is NOT assigned here (because you have bpm_mv and bpm_av separately).
 
     Returns columns: idx, phi, V
     """
-    stl_files = sorted(stl_dir.glob("ventricle_*.stl"))
-    if not stl_files:
-        raise FileNotFoundError(f"No ventricle_*.stl files found in: {stl_dir}")
+    items = discover_phase_stls(stl_dir, pattern=pattern)   # [(idx, path), ...] sorted
+    idxs = [idx for idx, _ in items]
 
-    idxs: List[int] = []
-    files: List[Path] = []
-    for f in stl_files:
-        idx = stl_index_from_name(f.name)
-        if idx is None:
-            continue
-        idxs.append(idx)
-        files.append(f)
-
-    if not files:
-        raise FileNotFoundError(f"Found ventricle_*.stl but none matched ventricle_<index>.stl in {stl_dir}")
-
-    order = np.argsort(idxs)
-    idxs = [idxs[i] for i in order]
-    files = [files[i] for i in order]
-
-    N = max(idxs)
-    if N <= 0:
-        raise ValueError(f"Max ventricle index N={N} not valid in {stl_dir}")
+    # Normalize phase by the actual index span, so a series that starts at 0 OR
+    # at 1 (or any offset) both map to phi in [0, 1]. For a 0-based series this
+    # is identical to the old idx / max(idx).
+    idx_min, idx_max = min(idxs), max(idxs)
+    span = idx_max - idx_min
+    if span <= 0:
+        raise ValueError(
+            f"Need at least two distinct phase frames in {stl_dir} "
+            f"(got indices {sorted(set(idxs))})."
+        )
 
     records: List[Tuple[int, float, float]] = []
-    for idx, f in zip(idxs, files):
-        phi = float(idx) / float(N)
+    for idx, f in items:
+        phi = float(idx - idx_min) / float(span)
 
         mesh = trimesh.load_mesh(f, force="mesh")
         if hasattr(mesh, "is_watertight") and not mesh.is_watertight:
@@ -644,24 +744,158 @@ def find_valve_files(case_dir: Path) -> Tuple[Optional[Path], Optional[Path]]:
     return av, mv
 
 
-def detect_case_folders(root: Path) -> List[Path]:
-    case_dirs = []
-    for d in root.rglob("*"):
-        if not d.is_dir():
-            continue
+def resolve_case_dir(stl_dir: Path) -> Path:
+    """
+    Locate the 'case' folder that holds inputPython.txt and the AV/MV CSVs.
+
+    You point the script at the folder containing the mesh frames (your Blender
+    '/STL/' export). The case-level inputs may sit right there (flat layout) or
+    one level up in the parent case folder. This returns whichever of
+    {stl_dir, stl_dir.parent} actually contains those inputs, preferring
+    stl_dir. Falls back to the parent (with a warning) if neither does.
+    """
+    def has_inputs(d: Path) -> bool:
         av, mv = find_valve_files(d)
-        if av is None or mv is None:
-            continue
-        if not (d / "STL").is_dir():
-            continue
-        # require at least one ventricle STL file
-        if not any((d / "STL").glob("ventricle_*.stl")):
-            continue
-        case_dirs.append(d)
-    return sorted(set(case_dirs))
+        return (d / "inputPython.txt").exists() or av is not None or mv is not None
+
+    if has_inputs(stl_dir):
+        return stl_dir
+    if has_inputs(stl_dir.parent):
+        return stl_dir.parent
+    warnings.warn(
+        f"Could not find inputPython.txt or *_AV/_MV.csv in {stl_dir} "
+        f"or its parent {stl_dir.parent}. Using the parent as the case folder."
+    )
+    return stl_dir.parent
 
 
-def process_case(case_dir: Path, n_phase: int = 400) -> CaseData:
+def _valve_input_errors(stl_dir: Path, case_dir: Path) -> List[str]:
+    """
+    Collect ALL problems with the valve-diameter inputs (empty list == usable).
+
+    Mirrors stl_plot._connectivity_errors: pure existence/parse checks, nothing is
+    written. `stl_dir` holds the numbered STL frames; `case_dir` is the resolved
+    folder that should hold inputPython.txt and the *_AV/_MV velocity CSVs.
+    """
+    errors: List[str] = []
+
+    # (1) STL frames: folder must exist and hold at least two distinct indices.
+    if not stl_dir.exists():
+        errors.append(f"STL folder does not exist: {stl_dir}")
+    elif not stl_dir.is_dir():
+        errors.append(f"STL path is not a folder: {stl_dir}")
+    else:
+        try:
+            idxs = sorted({i for i, _ in discover_phase_stls(stl_dir)})
+            if len(idxs) < 2:
+                errors.append(
+                    f"Need at least two numbered STL frames in {stl_dir}; "
+                    f"found indices {idxs}."
+                )
+        except FileNotFoundError:
+            errors.append(
+                f"No numbered STL frames (e.g. 'ventricle_0.stl' or '..._000.stl') "
+                f"found in: {stl_dir}"
+            )
+
+    # (2) inputPython.txt: name both folders resolve_case_dir considers.
+    input_txt = case_dir / "inputPython.txt"
+    params: Dict[str, object] = {}
+    if not input_txt.is_file():
+        errors.append(
+            f"'inputPython.txt' not found. Looked in the STL folder ({stl_dir}) "
+            f"and its parent ({stl_dir.parent})."
+        )
+    else:
+        params = parse_inputpython_txt(input_txt)
+
+    # (3) bpm_mv / bpm_av: present, numeric, > 0.
+    def positive_bpm(key: str) -> Optional[float]:
+        raw = params.get(key)
+        if raw is None:
+            if input_txt.is_file():
+                errors.append(
+                    f"'{key}' is missing from {input_txt}. Add a line such as "
+                    f"'{key} 85' (heart rate in beats per minute)."
+                )
+            return None
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            errors.append(f"'{key}' in {input_txt} is not a number: {raw!r}.")
+            return None
+        if not np.isfinite(val) or val <= 0:
+            errors.append(f"'{key}' in {input_txt} must be > 0 (got {val}).")
+            return None
+        return val
+
+    bpm = {"MV": positive_bpm("bpm_mv"), "AV": positive_bpm("bpm_av")}
+
+    # (4) Velocity CSVs: present, unique, parseable, and long enough for one beat.
+    av_file, mv_file = find_valve_files(case_dir)
+    for label, f in (("MV", mv_file), ("AV", av_file)):
+        if f is None:
+            errors.append(
+                f"No {label} velocity file (*_{label}.csv or *_{label}.scv) "
+                f"found in {case_dir}."
+            )
+            continue
+
+        candidates = sorted(list(case_dir.glob(f"*_{label}.csv"))
+                            + list(case_dir.glob(f"*_{label}.scv")))
+        if len(candidates) > 1:
+            errors.append(
+                f"Multiple {label} velocity files match in {case_dir}: "
+                f"{[c.name for c in candidates]}. Keep exactly one."
+            )
+
+        try:
+            df = read_velocity_csv(f)
+        except Exception as e:      # pandas ParserError/EmptyDataError, OSError, ...
+            errors.append(
+                f"{label} velocity file '{f.name}' could not be read: {e} "
+                f"(expected: no header, ';' separated, decimal comma, "
+                f"columns 'time;velocity' with velocity in cm/s)."
+            )
+            continue
+
+        # Same threshold as extract_best_cycle_by_time_peak_aligned, so the user
+        # learns about a too-short trace here instead of mid-fit.
+        b = bpm[label]
+        if b is not None:
+            T = 60.0 / b
+            span = float(df["t"].max() - df["t"].min())
+            if span < 0.9 * T:
+                errors.append(
+                    f"{label} Doppler trace '{f.name}' spans {span:.3g}s but one beat "
+                    f"at bpm_{label.lower()}={b:g} lasts {T:.3g}s; the recording is "
+                    f"shorter than one cycle. Use a longer trace or fix the bpm value."
+                )
+
+    return errors
+
+
+def validate_valve_inputs(root) -> Tuple[Path, Path]:
+    """
+    Resolve (stl_dir, case_dir) and fail fast if the inputs are unusable.
+
+    Raises ValveInputError carrying every problem at once, so one console message
+    lists everything the user has to fix. Writes nothing, hence safe to call before
+    any output folder is created.
+    """
+    stl_dir = Path(root)
+    case_dir = resolve_case_dir(stl_dir)
+    errors = _valve_input_errors(stl_dir, case_dir)
+    if errors:
+        raise ValveInputError(errors)
+    return stl_dir, case_dir
+
+
+def process_case(case_dir: Path, n_phase: int = 400, stl_dir: Optional[Path] = None) -> CaseData:
+    # case_dir -> holds inputPython.txt, the AV/MV CSVs, and receives the outputs
+    # stl_dir  -> holds the mesh frames; defaults to case_dir (flat layout)
+    if stl_dir is None:
+        stl_dir = case_dir
 
     fit: Dict[str, object] = {}
     params = parse_inputpython_txt(case_dir / "inputPython.txt")
@@ -672,7 +906,6 @@ def process_case(case_dir: Path, n_phase: int = 400) -> CaseData:
     av_df = read_velocity_csv(av_file) if av_file else None
     mv_df = read_velocity_csv(mv_file) if mv_file else None
 
-    stl_dir = case_dir 
     vol_df = compute_volume_vs_phase_from_stl(stl_dir)
     vol_df = smooth_and_dVdphi(vol_df, polyorder = 3)
 
@@ -865,7 +1098,7 @@ def process_case(case_dir: Path, n_phase: int = 400) -> CaseData:
     axs[1].legend(loc="best")
 
     fig.suptitle(f"Case: {case_dir.name} (bpm_mv={bpm_mv}, bpm_av={bpm_av})")
-    fig.savefig(os.path.join(stl_dir,"calc_valve_diameters_outputs") + "/" + f"{case_dir.name}_fitted.png", dpi=150, bbox_inches="tight")
+    fig.savefig(os.path.join(case_dir, "calc_valve_diameters_outputs", f"{case_dir.name}_fitted.png"), dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return CaseData(
@@ -891,19 +1124,47 @@ def cases_to_jsonable(cases: Dict[str, CaseData]) -> Dict[str, object]:
         out[k] = d
     return out
 
-def main_calc_diameter(root,n_phase):
-    os.makedirs(os.path.join(root,"calc_valve_diameters_outputs"),exist_ok=True)
-    root = Path(root)
+def main_calc_diameter(root, n_phase):
+    # `root` is the folder you point Blender at -- the one holding the mesh
+    # frames (your '/STL/' export). inputPython.txt and the AV/MV CSVs may sit
+    # there or one level up; resolve_case_dir figures out which. All outputs go
+    # under the resolved case folder.
+    #
+    # Validate first: a missing CSV or bpm key would otherwise skip a fit block
+    # silently and hand back nan radii instead of an error.
+    stl_dir, case_dir = validate_valve_inputs(root)
+
+    out_dir = case_dir / "calc_valve_diameters_outputs"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     figs = []
     summary_rows = []
 
-    case, _ = process_case(root, n_phase=n_phase)
+    case, _ = process_case(case_dir, n_phase=n_phase, stl_dir=stl_dir)
     #figs.append(fig)
+
+    r_mv_minor = case.fit.get("d_MV_minor", np.nan)/2
+    r_mv_major = case.fit.get("d_MV_major", np.nan)/2
+    r_av = case.fit.get("d_AV", np.nan)/2
+
+    # Safety net: the inputs were fine, so a non-finite radius means the fit itself
+    # degenerated (fit_scaling_signed / area_to_* return nan on a vanishing scale).
+    non_finite = [name for name, v in (("MV minor radius", r_mv_minor),
+                                       ("MV major radius", r_mv_major),
+                                       ("AV radius", r_av)) if not np.isfinite(v)]
+    if non_finite:
+        raise ValveInputError(
+            [f"The fit produced a non-finite {n}." for n in non_finite]
+            + ["The Doppler traces and the STL volume curve may be incompatible "
+               "(the fitted scale collapsed to zero). Check the *_MV/*_AV CSVs and "
+               "the bpm_mv/bpm_av values."],
+            summary="Valve-diameter fit produced a non-finite result",
+        )
+
     summary_rows.append({
-        "r_MV_minor": case.fit.get("d_MV_minor", np.nan)/2,
-        "r_MV_major": case.fit.get("d_MV_major", np.nan)/2,
-        "r_AV": case.fit.get("d_AV", np.nan)/2,
+        "r_MV_minor": r_mv_minor,
+        "r_MV_major": r_mv_major,
+        "r_AV": r_av,
         "path": case.path,
         "bpm_mv": case.bpm_mv,
         "bpm_av": case.bpm_av,
@@ -914,6 +1175,6 @@ def main_calc_diameter(root,n_phase):
         "d_AV": case.fit.get("d_AV", np.nan),
     })
 
-    pd.DataFrame(summary_rows).to_csv(os.path.join(root,"calc_valve_diameters_outputs") + "/summary.csv", index=False)
-    
-    return figs, (case.fit.get("d_MV_minor", np.nan)/2, case.fit.get("d_MV_major", np.nan)/2, case.fit.get("d_AV", np.nan)/2)
+    pd.DataFrame(summary_rows).to_csv(out_dir / "summary.csv", index=False)
+
+    return figs, (r_mv_minor, r_mv_major, r_av)

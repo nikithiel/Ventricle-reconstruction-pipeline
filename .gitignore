@@ -185,6 +185,12 @@ Export/
 output/
 Output/
 Connectivity/
+# Ignore everything under dataset/ except the raw/rotated/export template folders.
+/dataset/*
+!/dataset/example/
+!/dataset/example/STL/rotated/Connectivity/
+!/dataset/example/export/
+!/dataset/example/export/Connectivity/
 
 # Temporary files
 *.tmp
