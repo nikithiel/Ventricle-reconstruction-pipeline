@@ -21,23 +21,18 @@ import os
 import re
 
 import pycpd
-from mathutils.bvhtree import BVHTree
 import matplotlib
 matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
-
 import multiprocessing as mp
-
 from pathlib import Path
-
-
 from stl_plot import check_stl_and_connectivity, derive_ed_es_from_volume_curve, parseRunTimeVariables_unique
 from calculate_valve_diameters import main_calc_diameter
 scene = bpy.types.Scene
 
 dev_env_tools = True
 
-# Generally used functions.
+# --- GENERAL USE FUNCTIONS --- #
 def cons_print(data):
     """Print to console for button presses. Used for error messages, information outputs and warnings"""
     for window in bpy.context.window_manager.windows:
@@ -119,7 +114,7 @@ def smooth_vertex_group(obj ,group, factor=0.5, iter=5, use_laplacian=False):
     bpy.ops.object.vertex_group_set_active(group=group)
     bpy.ops.object.vertex_group_select()
 
-    if use_laplacian:
+    if use_laplacian: # Use laplacian smoothing but not with iterative smoothing and no lambda border
         bpy.ops.object.mode_set(mode='OBJECT')  
         modifier = obj.modifiers.new(name="laplacian smooth", type='LAPLACIANSMOOTH')
         modifier.iterations = iter 
@@ -129,7 +124,7 @@ def smooth_vertex_group(obj ,group, factor=0.5, iter=5, use_laplacian=False):
         modifier.use_volume_preserve = True
         bpy.ops.object.modifier_apply(modifier='laplacian smooth')
     else:
-        for i in range(iter):
+        for i in range(iter): # Here apply iterative smoothing for better results
             bpy.ops.mesh.vertices_smooth(factor=factor, repeat=iter+1-i)
     bpy.ops.object.mode_set(mode='OBJECT')
 
@@ -138,6 +133,180 @@ def get_value(self):
 
 def set_value(self,value):
     self["ventricle_import_dir"] = value
+
+def translate_mesh(context, obj, shift, group=None):
+    """Translates a mesh, if a group is given, then only translates the vertices of that mesh that belongs to that group"""
+    if group is not None: # A vertex group is specified, we only shift vertices in this group. The group has to be inputted as string
+        bpy.ops.Object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all( action = 'DESELECT' )
+        bpy.ops.object.vertex_group_set_active(group=group)
+        bpy.ops.object.vertex_group_select()
+
+    if obj.mode == "EDIT":
+        bm = bmesh.from_edit_mesh(obj.data)
+        edbm = True
+    else:
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        edbm = False
+
+    if not edbm:
+        for v in bm.verts:
+            for i in range(len(v.co)):
+                v.co[i] += shift[i]
+    else:
+        for v in bm.verts:
+            if v.select:
+                for i in range(len(v.co)):
+                    v.co[i] += shift[i]
+    
+    if not edbm:
+        bm.to_mesh(obj.data)
+    obj.data.update()
+    bpy.ops.Object.mode_set(mode="OBJECT")
+    return True
+
+def get_min_max_x(obj, group_id=None):
+    """Get the highest and lowest x axis point of an object group belonging to a certain vertex group"""
+    min_x = 1000
+    for v in obj.data.vertices:
+        if min_x > v.co[0] and (group_id in [g.group for g in v.groups] or group_id is None):
+            min_x = v.co[0]
+
+    max_x = -1000
+    for v in obj.data.vertices:
+        if max_x < v.co[0] and (group_id in [g.group for g in v.groups] or group_id is None):
+            max_x = v.co[0]
+
+    return (min_x, max_x)
+
+def get_min_max_y(obj, group_id=None):
+    """Get the highest and lowest y axis point of an object group belonging to a certain vertex group"""
+    min_y = 1000
+    for v in obj.data.vertices:
+        if min_y > v.co[1] and (group_id in [g.group for g in v.groups] or group_id is None):
+            min_y = v.co[1]
+
+    max_y = -1000
+    for v in obj.data.vertices:
+        if max_y < v.co[1] and (group_id in [g.group for g in v.groups] or group_id is None):
+            max_y = v.co[1]
+
+    return (min_y, max_y)
+
+def get_min_max_z(obj, group_id=None):
+    """Get the highest and lowest z axis point of an object group belonging to a certain vertex group"""
+    min_z = 1000
+    for v in obj.data.vertices:
+        if min_z > v.co[2] and (group_id in [g.group for g in v.groups] or group_id is None):
+            min_z = v.co[2]
+
+    max_z = -1000
+    for v in obj.data.vertices:
+        if max_z < v.co[2] and (group_id in [g.group for g in v.groups] or group_id is None):
+            max_z < v.co[2]
+
+    return (min_z, max_z)
+
+def shift_shrinkwrap_topology_batch(context,matrices=None):
+    """
+    Wrapper function to perform shift and shrinkwrap. Matrices are for tracking the absolute movement of the valves
+    """
+    scene = context.scene
+    view_layer = context.view_layer
+    selected_objects = context.selected_objects
+
+    if not matrices:
+        pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
+        pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
+    else:
+        pos_matrix_mitral = matrices[0]
+        pos_matrix_aortic = matrices[1]
+
+    selected_names = [obj.name for obj in selected_objects]
+    selected_names = sorted(selected_names, key=get_frame_number)
+    
+    temp_name = selected_names[0]
+    for i in range(1,len(selected_names)):
+        source = bpy.data.objects.get(temp_name)
+        source_copy = copy_object(source.name, source.name + '_COPY')
+        target = bpy.data.objects.get(selected_names[i])
+
+        # --- Shift and shrinkwrap the body part --- #
+        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
+        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
+        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps 
+        translate_mesh(context, source_copy,shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position
+
+        # --- Shift and shrinkwrap only the lower edge loop --- #
+        ll_x_shift = get_min_max_x(target,0)[1] + get_min_max_x(target,0)[0] - get_min_max_x(source_copy,0)[1] - get_min_max_x(source_copy,0)[0]
+        ll_y_shift = get_min_max_y(target,0)[1] + get_min_max_y(target,0)[0] - get_min_max_y(source_copy,0)[1] - get_min_max_y(source_copy,0)[0]
+        ll_z_shift = get_min_max_z(target,0)[1] + get_min_max_z(target,0)[0] - get_min_max_z(source_copy,0)[1] - get_min_max_z(source_copy,0)[0]
+        
+        lower_loop_shift = [0.5 * ll_x_shift, 0.5* ll_y_shift, 0.5 * ll_z_shift] # Calcs the difference between the lowest points between source and target
+        translate_mesh(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop') # Shifts only the lower edge loop according to above line
+        shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='PROJECT', group='lower_basal_edge_loop', use_axis=[0,0,0]) # Performs shrinkwrap on the lower edge loop
+        shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='NEAREST_SURFACEPOINT', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
+        
+        temp_name = selected_names[i]
+        bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
+        source_copy.name = temp_name # Rename reference object
+    
+    # --- Retroactive smoothing to avoid cascading recurring smoothing (WIP) --- #
+    for name in selected_names: # All the resulting objects post transformation should still have the same name
+        obj = bpy.data.objects.get(name)
+        if name=='ventricle_0_basal': 
+            make_custom_group(context,obj, exclude_groups=[0,3,6])
+        smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
+
+def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body', use_axis=[0,0,0]):
+    """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
+    scene = context.scene
+    view_layer = context.view_layer
+
+    # Shift the source to overlay one of the valves before shrinkwrapping
+    if shift is not None:
+        translate_mesh(context, source, shift, group=None)
+    
+    bpy.context.view_layer.objects.active = source
+    make_custom_group(context,source, exclude_groups=[0,3,6]) # 0 lower loop, 3 mitral, 6 aortic. [3,6] to pick everything except valves
+    # Here we add then apply modifiers to the copied object that makes it shrinkwrap around the target
+    modifier = source.modifiers.new(name="shrinkwrap", type='SHRINKWRAP')
+    modifier.target = target
+    modifier.wrap_method = shrinkwrap
+    modifier.vertex_group = group
+    if shrinkwrap == 'PROJECT': # If it's using project modifier, also refer to the axis parameter to decide what axis to use
+        modifier.use_project_x = use_axis[0]
+        modifier.use_project_y = use_axis[1]
+        modifier.use_project_z = use_axis[2]
+    bpy.ops.object.modifier_apply(modifier='shrinkwrap')
+
+def make_custom_group(context,obj, exclude_groups=[0,3,6]):
+    """
+    Function that adds a new group which only includes vertices that are not the valves and lower loop
+    The group index are 0 for lower basal loop, 3 for mitral valve and 6 for aortic valve
+    """
+    scene = context.scene
+    view_layer = context.view_layer
+    bpy.context.view_layer.objects.active = obj
+
+    bpy.ops.Object.mode_set(mode="OBJECT")
+    group = obj.vertex_groups.new(name='body')
+    v_indices = []
+    matching_group = True
+    for v in obj.data.vertices:
+        matching_group = True
+        for g in v.groups:
+            if g.group in exclude_groups:
+                matching_group = False
+                break
+        if matching_group:
+            v_indices.append(v.index)
+
+    group.add(v_indices, 1,'REPLACE')
+    
+    return True
+    
 # UI-interface functions.
 class MESH_OT_get_node(bpy.types.Operator):
     """Get node position coordinates and save coordinates in UI"""
@@ -766,7 +935,6 @@ def create_valve_orifice(context, valve_mode):
     smooth_relax_edgeloop(obj, vg_orifice) 
     bpy.ops.object.mode_set(mode='OBJECT')
     return True
-
 def select_valve_vertices(context, valve_mode):
     """Select all vertices of a given valve"""
     if 'Valve_area' in [obj.name for obj in bpy.data.objects]: bpy.data.objects.remove(bpy.data.objects['Valve_area'], do_unlink=True) # Remove valve area object, if an object with the same name already exists.
@@ -931,7 +1099,7 @@ def build_valve_surface(context, obj, valve_mode, ratio, valve_index):
 
 def update_value_for_translation(context, frame_id, pos_matrix_mitral, pos_matrix_aortic):
     """Update the translation values in the valve options panel using saved data from relative data value"""
-    if frame_id == 0:
+    if frame_id == 0: # First object in the list, no need to update the values
         return True
     else:
         # Just updates the value using the previous frame as reference position
@@ -946,7 +1114,6 @@ class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal regions of ventricles using the position and angles of the heart valves.'
     def execute(self, context):
-        """Values aus Daniel 0,-4,50.5 und 0,4,50.5"""
         _, matrices = mesh_create_basal_batch(context)
         shift_shrinkwrap_topology_batch(context, matrices)
         return{'FINISHED'} 
@@ -963,10 +1130,8 @@ def mesh_create_basal_batch(context):
     selected_names = [obj.name for obj in selected_objects]
     selected_names = sorted(selected_names, key=get_frame_number)
 
-    #for obj in selected_objects:
     for i in range(0,len(selected_names)):
         obj = bpy.data.objects.get(selected_names[i])
-        #frame_id = obj.name[-1]
         if not update_value_for_translation(context, i, pos_matrix_mitral, pos_matrix_aortic): return{'CANCELLED'}
         if not mesh_create_basal(context, [obj]): 
             cons_print("FAILED")
@@ -1241,40 +1406,6 @@ def select_only_inner_basal_vertices():
     bpy.ops.object.vertex_group_deselect()
     bpy.ops.object.mode_set(mode='OBJECT') 
 
-def translate_mesh(context, obj, shift, group=None):
-    """Translates a mesh, if a group is given, then only translates the vertices of that mesh that belongs to that group"""
-    if group is not None: # A vertex group is specified, we only shift vertices in this group. The group has to be inputted as string
-        bpy.ops.Object.mode_set(mode="EDIT")
-        #deselect_object_vertices(obj)
-        bpy.ops.mesh.select_all( action = 'DESELECT' )
-        #obj.vertex_groups.active = obj.vertex_groups[group]
-        bpy.ops.object.vertex_group_set_active(group=group)
-        bpy.ops.object.vertex_group_select()
-
-    if obj.mode == "EDIT":
-        bm = bmesh.from_edit_mesh(obj.data)
-        edbm = True
-    else:
-        bm = bmesh.new()
-        bm.from_mesh(obj.data)
-        edbm = False
-
-    if not edbm:
-        for v in bm.verts:
-            for i in range(len(v.co)):
-                v.co[i] += shift[i]
-    else:
-        for v in bm.verts:
-            if v.select:
-                for i in range(len(v.co)):
-                    v.co[i] += shift[i]
-    
-    if not edbm:
-        bm.to_mesh(obj.data)
-    obj.data.update()
-    bpy.ops.Object.mode_set(mode="OBJECT")
-    return True
-
 def find_min_z(context,obj):
     #FIND MIN
     bpy.context.view_layer.objects.active = obj
@@ -1290,40 +1421,6 @@ def find_min_z(context,obj):
     
     return min_z
 
-def translate_and_morph_batch(context, matrices):
-    selected_objects = context.selected_objects
-    selected_objects_names = [obj.name for obj in selected_objects]
-    pos_matrix_mitral = matrices[0]
-    pos_matrix_aortic = matrices[1]
-    bpy.ops.object.mode_set(mode='EDIT') 
-    
-    for ob in selected_objects:
-        bpy.context.view_layer.objects.active = ob
-        also_select_lower_regions(ob)
-     
-    #ref = selected_objects[0]
-    temp_name = selected_objects[0].name
-    for i in range(1,len(selected_objects)):
-        # This only works if the relative index of the selected objects matches the position matrix.
-        ref = bpy.data.objects.get(temp_name) # Takes the previous target and uses it as a reference
-        ref_copy = copy_object(ref.name, ref.name + '_COPY')
-        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
-        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
-        shift = shift_mitral + shift_aortic / 2
-        
-        #bpy.ops.Object.mode_set(mode="EDIT")
-        z_shift = find_min_z(context, selected_objects[i]) - find_min_z(context, ref_copy)
-        shift[2] = z_shift
-        
-        bpy.ops.Object.mode_set(mode="OBJECT")
-        translate_mesh(context,ref_copy, shift) # Shift
-        #bpy.ops.Object.mode_set(mode="EDIT")
-        BvH_transform(ref_copy,selected_objects[i]) # Morph it
-        
-        temp_name = selected_objects[i].name
-        bpy.data.objects.remove(selected_objects[i], do_unlink=True) # Remove the previous target object so that there's no overlap
-        #selected_objects[i].name = selected_objects[i].name + "_FALSE"
-        ref_copy.name = temp_name # Rename reference object
 class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
     """Connect apical and basal region of ventricle"""
     bl_idname = 'heart.connect_apical_and_basal'
@@ -1356,27 +1453,6 @@ def select_lower_regions(region):
         bpy.ops.object.mode_set(mode='OBJECT')
         # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
         curr_basal.select_set(False)
-        #curr_basal.hide_set(True)
-    
-def also_select_lower_regions(region):
-    name = region.name
-    if not name in bpy.data.objects: # Check if all necessary basal regions are present.
-        cons_print(f"Missing following basal region: {name}")
-        return False       
-    else:  
-        curr_basal = bpy.data.objects[name]
-        # Unhide current basal region and use it as active object.
-        curr_basal.hide_set(False)
-        curr_basal.select_set(True)
-         #bpy.context.view_layer.objects.active = curr_basal
-        # Select only lower basal edge loop vertex group.
-        #deselect_object_vertices(curr_basal)
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.object.vertex_group_set_active(group=str("lower_basal_edge_loop"))
-        bpy.ops.object.vertex_group_select()
-        #bpy.ops.object.mode_set(mode='OBJECT')
-        # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
-        #curr_basal.select_set(False)
         #curr_basal.hide_set(True)
 
 def mesh_connect_apical_and_basal_pairs(context):
@@ -1422,7 +1498,7 @@ def triangulate_object(obj):
 # --- This function is where the bulk of the process happens. For every pair of basal and ventricle, this function is called and performs the connection and the smoothing
 def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
-    ## Apply connecting operation for reference and save connecting edges used in the connection.
+    # Apply connecting operation for reference and save connecting edges used in the connection.
     prepare_geometry_for_bridging_pairs(context, ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
     edge_indices_bridge = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
     inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
@@ -1725,9 +1801,6 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
         if not mesh_create_basal_batch(context): 
             print("Not working or not returning")
             return{'CANCELLED'}# Operations to create basal region of the ventricle containing valve orifices.
-        if not morph_topology(context): 
-            print("Morph topology not working")
-            return{'CANCELLED'} # Morph the topology of all the generated basal regions to match
         if not mesh_connect_apical_and_basal_pairs(context): 
             print("Something went wrong here")
             return {'CANCELLED'} # Connect apical regions with corresponding bassal regions.
@@ -2018,13 +2091,6 @@ def test_function(context):
     view_layer = context.view_layer
     selected_objects = context.selected_objects
     mesh_create_basal_batch(context)
-    #translate_mesh(context,selected_objects[0],shift=[0,0,-1], group="lower_basal_edge_loop")
-    #cons_print(get_lowest_vertex(selected_objects[0]))
-    #cons_print(compareMeshes(selected_objects[0], selected_objects[1]))
-    #morph_topology(context)
-    #BvH_transform(source=selected_objects[0], target=selected_objects[1])
-    #selected_objects[0].data.update
-    #smooth_vertex_group(selected_objects[0],'body')
     return True
 #-----
 
@@ -2239,10 +2305,6 @@ class PANEL_Pipeline(bpy.types.Panel):
         row.operator('heart.remove_basal', text= "Remove basal region", icon = 'LIBRARY_DATA_OVERRIDE')  
         row = layout.row()
         layout.operator('heart.create_basal', text= "Create basal region", icon = 'SPHERECURVE')
-        # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
-        row = layout.row()
-        layout.operator('heart.object_transform', text = "Morph topology", icon = "TRANSFORM_ORIGINS")
-        
         row = layout.row()
         layout.operator('heart.connect_apical_and_basal', text= "Connect basal and apical regions", icon = 'ORPHAN_DATA')
         row = layout.row()
@@ -2708,54 +2770,6 @@ class MESH_OT_store_ref_positions(bpy.types.Operator):
 
 # Look for names ending in "_<digits>", e.g. "..._0", "..._00", "..._123"
 VENTRICLE_SUFFIX_RE = re.compile(r"_(\d+)$")
-def get_min_max_x(obj):
-    #bm = bmesh.new()
-    #bm.from_mesh(obj.data)
-
-    min_x = 1000
-    for v in obj.data.vertices:
-        if min_x > v.co[0] and 0 in [g.group for g in v.groups]:
-            min_x = v.co[0]
-
-    max_x = -1000
-    for v in obj.data.vertices:
-        if max_x < v.co[0] and 0 in [g.group for g in v.groups]:
-            max_x = v.co[0]
-
-    return (min_x, max_x)
-
-def get_min_max_y(obj):
-    bm = bmesh.new()
-    bm.from_mesh(obj.data)
-
-    min_y = 1000
-    for v in obj.data.vertices:
-        if min_y > v.co[1] and 0 in [g.group for g in v.groups]:
-            min_y = v.co[1]
-
-    max_y = -1000
-    for v in obj.data.vertices:
-        if max_y < v.co[1] and 0 in [g.group for g in v.groups]:
-            max_y = v.co[1]
-
-    return (min_y, max_y)
-
-def get_min_max_z(obj):
-    bm = bmesh.new()
-    bm.from_mesh(obj.data)
-
-    min_z = 1000
-    for v in obj.data.vertices:
-        if min_z > v.co[2] and 0 in [g.group for g in v.groups]:
-            min_z = v.co[2]
-
-    max_z = -1000
-    for v in obj.data.vertices:
-        if max_z < v.co[2] and 0 in [g.group for g in v.groups]:
-            max_z < v.co[2]
-
-    return (min_z, max_z)
-
 def get_ventricle_index_from_name(name: str):
     """
     Return integer index from names like 'ventricle_0', 'LV_00', 'foo_000',
@@ -2821,236 +2835,6 @@ def export_object_to_stl(obj, filepath, depsgraph=None):
         f.write("endsolid\n")
 
     eval_obj.to_mesh_clear()
-
-class MESH_OT_object_transform(bpy.types.Operator):
-    """Reshape mesh object to preserve mesh connetivity and topology between objects. Currently uses the object with max mesh count as reference"""
-    bl_idname = 'heart.object_transform'
-    bl_label = 'Object Transformation'
-    def execute(self,context):
-        if not morph_topology(context): return{"CANCELLED"}
-        return{"FINISHED"}
-
-def morph_topology(context):
-    """Legacy morph topology function"""
-    scene = context.scene
-    view_layer = context.view_layer
-
-    # --- Remember original selection & active object, also which meshes were selected ---
-    selected_objects = context.selected_objects
-    
-    if len(selected_objects) == 0 or not selected_objects:
-        cons_print(f"No objects selected")
-        return False
-
-    # ---  Picks a reference object as a basis to be transformed  ---
-
-    bpy.ops.object.mode_set(mode="EDIT")
-    max = 0
-    for a in selected_objects:
-        if len(bmesh.from_edit_mesh(a.data).verts) > max:
-            source = a
-            max = len(bmesh.from_edit_mesh(a.data).verts)
-    
-    cons_print(f"Object used as reference {source.name}")
-    
-    bpy.ops.object.mode_set(mode='OBJECT') 
-    
-    for obj in selected_objects:
-        if obj != source:
-            cons_print(f"current object target {obj.name}")
-            #copied_source = copy_object(source.name, obj.name + "_transformed")
-            #CPD_transform(copied_source,obj)
-            #copied_source.data.update()
-            copied_source_bvh = copy_object(source.name, obj.name + "_transformed")
-            BvH_transform(copied_source_bvh,obj)
-            copied_source_bvh.data.update()
-            copied_source_bvh.select_set(True)
-            # Remove old objects
-            bpy.data.objects.remove(bpy.data.objects[obj.name], do_unlink=True)
-            copied_source_bvh.name = copied_source_bvh.name[:-12]
-
-    cons_print(f"Operation completed")
-    return True
-    
-def CPD_transform(source,target):
-    """Legacy Coherent Point Drift morph function"""
-    source_vert = []
-    for v in source.data.vertices:
-        source_vert.append(list(v.co[:]))
-
-    target_vert = []
-    for v in target.data.vertices:
-        target_vert.append(list(v.co[:]))
-
-    reg = pycpd.RigidRegistration(X=np.asarray(target_vert), Y=np.asarray(source_vert))
-    TY, _ = reg.register()
-    for i in range(len(source.data.vertices)):
-        source.data.vertices[i].co = mathutils.Vector(TY[i])
-    source.data.update()
-
-def BvH_transform(source, target, group= None, partial= False):
-    """Legacy morph function using BvH Trees"""
-    bvh = BVHTree.FromObject(target, bpy.context.evaluated_depsgraph_get())
-    
-    for v in source.data.vertices:
-        if partial: # Only morphs the selected vertices
-            if v.select: 
-                world_co = source.matrix_world @ v.co
-
-                loc, _, _, _ = bvh.find_nearest(world_co)
-
-                if loc:
-                    v.co = source.matrix_world.inverted() @ loc
-        else:
-            world_co = source.matrix_world @ v.co
-            
-            loc, _, _, _ = bvh.find_nearest(world_co)
-
-            if loc:
-                v.co = source.matrix_world.inverted() @ loc
-
-def shift_shrinkwrap_topology_batch(context,matrices=None):
-    """
-    Wrapper function to perform shift and shrinkwrap. Matrices are for tracking the absolute movement of the valves
-    """
-    scene = context.scene
-    view_layer = context.view_layer
-    selected_objects = context.selected_objects
-
-    if not matrices:
-        pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
-        pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
-    else:
-        pos_matrix_mitral = matrices[0]
-        pos_matrix_aortic = matrices[1]
-
-    selected_names = [obj.name for obj in selected_objects]
-    selected_names = sorted(selected_names, key=get_frame_number)
-    
-    temp_name = selected_names[0]
-    for i in range(1,len(selected_names)):
-        source = bpy.data.objects.get(temp_name)
-        source_copy = copy_object(source.name, source.name + '_COPY')
-        target = bpy.data.objects.get(selected_names[i])
-
-        # --- Shift and shrinkwrap the body part --- #
-        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
-        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
-        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps 
-        translate_mesh(context, source_copy,shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position
-
-        # --- Shift and shrinkwrap only the lower edge loop --- #
-        ll_x_shift = get_min_max_x(target)[1] + get_min_max_x(target)[0] - get_min_max_x(source_copy)[1] - get_min_max_x(source_copy)[0]
-        ll_y_shift = get_min_max_y(target)[1] + get_min_max_y(target)[0] - get_min_max_y(source_copy)[1] - get_min_max_y(source_copy)[0]
-        ll_z_shift = get_min_max_z(target)[1] + get_min_max_z(target)[0] - get_min_max_z(source_copy)[1] - get_min_max_z(source_copy)[0]
-        
-        lower_loop_shift = [0.5 * ll_x_shift, 0.5* ll_y_shift, 0.5 * ll_z_shift] # Calcs the difference between the lowest points between source and target
-        translate_mesh(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop') # Shifts only the lower edge loop according to above line
-        shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='PROJECT', group='lower_basal_edge_loop', use_axis=[0,0,0]) # Performs shrinkwrap on the lower edge loop
-        shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='NEAREST_SURFACEPOINT', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
-
-        #select_lower_regions(source_copy)
-        #BvH_transform(source_copy,target,partial=True)
-
-        #smooth_vertex_group(source_copy,'body', factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter)
-        
-        temp_name = selected_names[i]
-        bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
-        source_copy.name = temp_name # Rename reference object
-    
-    # Retroactive smoothing to avoid cascading recurring smoothing (WIP)
-    for name in selected_names: # All the resulting objects post transformation should still have the same name
-        obj = bpy.data.objects.get(name)
-        if name=='ventricle_0_basal': 
-            make_custom_group_to_morph(context,obj, exclude_groups=[0,3,6])
-        smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
-
-def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body', use_axis=[0,0,0]):
-    """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
-    scene = context.scene
-    view_layer = context.view_layer
-
-    # Shift the source to overlay one of the valves before shrinkwrapping
-    if shift is not None:
-        translate_mesh(context, source, shift, group=None)
-    
-    bpy.context.view_layer.objects.active = source
-    make_custom_group_to_morph(context,source, exclude_groups=[0,3,6]) # 0 lower loop, 3 mitral, 6 aortic. [3,6] to pick everything except valves
-    # Here we add modifiers to the copied object that makes it shrinkwrap around the target
-    modifier = source.modifiers.new(name="shrinkwrap", type='SHRINKWRAP')
-    modifier.target = target
-    modifier.wrap_method = shrinkwrap
-    modifier.vertex_group = group
-    #modifier.project_limit = 1
-    if shrinkwrap == 'PROJECT':
-        modifier.use_project_x = use_axis[0]
-        modifier.use_project_y = use_axis[1]
-        modifier.use_project_z = use_axis[2]
-    bpy.ops.object.modifier_apply(modifier='shrinkwrap')
-
-def make_custom_group_to_morph(context,obj, exclude_groups=[0,3,6]):
-    """
-    Function that adds a new group which only includes vertices that are not the valves and lower loop
-    The group index are 0 for lower basal loop, 3 for mitral valve and 6 for aortic valve
-    """
-    scene = context.scene
-    view_layer = context.view_layer
-    bpy.context.view_layer.objects.active = obj
-    exclude_group = exclude_groups #[0,3,6]
-
-    bpy.ops.Object.mode_set(mode="OBJECT")
-    group = obj.vertex_groups.new(name='body')
-    v_indices = []
-    matching_group = True
-    for v in obj.data.vertices:
-        matching_group = True
-        for g in v.groups:
-            if g.group in exclude_group:
-                matching_group = False
-                break
-        if matching_group:
-            v_indices.append(v.index)
-
-    group.add(v_indices, 1,'REPLACE')
-    
-    return True
-
-def compareMeshes(mesh1, mesh2):
-    bmesh1 = bmesh.from_edit_mesh(mesh1.data)
-    bmesh2 = bmesh.from_edit_mesh(mesh2.data)
-    if (len(bmesh1.verts) != len(bmesh2.verts)):
-        return f"Inequal amount of vertices. Between {len(bmesh1.verts)} and {len(bmesh2.verts)}"
-    if (len(bmesh1.edges) != len(bmesh2.edges)):
-        return "Inequal amount of edges"
-    if (len(bmesh1.faces) != len(bmesh2.faces)):
-        return "Inequal amount of faces"
-    #for each face, if the same verts make up the face
-    for i in range(0, len(bmesh1.faces)):
-        bmesh1faceVertsList = []
-        bmesh2faceVertsList = []
-        for vert in bmesh1.faces[i].verts:
-            bmesh1faceVertsList.append(vert.index)
-        for vert in bmesh2.faces[i].verts:
-            bmesh2faceVertsList.append(vert.index)
-        bmesh1faceVertsList.sort()
-        bmesh2faceVertsList.sort()
-        if (bmesh1faceVertsList != bmesh2faceVertsList):
-            return "Mismatching vertex on a face"
-    #for each edge, if the same verts make up the edge
-    for i in range(0, len(bmesh1.edges)):
-        bmesh1edgeVertsList = []
-        bmesh2edgeVertsList = []
-        for vert in bmesh1.edges[i].verts:
-            bmesh1faceVertsList.append(vert.index)
-        for vert in bmesh2.edges[i].verts:
-            bmesh2faceVertsList.append(vert.index)
-        bmesh1edgeVertsList.sort()
-        bmesh2edgeVertsList.sort()
-        if (bmesh1edgeVertsList != bmesh2edgeVertsList):
-            return "Mismatching vertex on an edge"
-    #if we make it through all the checks, we have a match!
-    return "It matches!"
-    
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 
@@ -3060,7 +2844,7 @@ classes = [
 
 dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, 
                PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, 
-               MESH_OT_object_transform, MESH_OT_calculate_valve_diameter,
+               MESH_OT_calculate_valve_diameter,
                MESH_OT_update_mitral_ref, MESH_OT_update_aorta_ref, MESH_OT_store_ref_positions]
   
 def register():
