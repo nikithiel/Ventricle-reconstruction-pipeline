@@ -26,12 +26,15 @@ import subprocess
 import importlib.util
 import time
 import warnings
+
 import matplotlib
 matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
+import multiprocessing as mp
+from pathlib import Path
 
 
-from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors,  format_volume_diff_lines, compute_frame_volume_diff
+from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
 
 try: # A broken settings log must never keep the addon from registering.
@@ -87,8 +90,7 @@ def deselect_object_vertices(obj, set_to_object=True):
     # Return to object mode and update the mesh to the obeject.
     bm.select_flush_mode()   
     me.update()
-    if set_to_object:
-        bpy.ops.object.mode_set(mode='OBJECT') 
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 def join_objects(obj, joined_obj):
     """Join two objects without changing the selection"""
@@ -1185,19 +1187,6 @@ def mesh_create_basal_batch(context):
             cons_print("No elements selected.")
             return False
     selected_objects = context.selected_objects
-    pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
-    pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
-
-    selected_names = [obj.name for obj in selected_objects]
-    selected_names = sorted(selected_names, key=get_frame_number)
-
-    for i in range(0,len(selected_names)):
-        obj = bpy.data.objects.get(selected_names[i])
-        if not update_value_for_translation(context, i, pos_matrix_mitral, pos_matrix_aortic): return{'CANCELLED'}
-        if not mesh_create_basal(context, [obj]): 
-            cons_print("FAILED")
-            return{'CANCELLED'}
-    # Selects all the objects for the next step
     for obj in selected_objects:
         stringname = obj.name + "_basal"
         basalobj = bpy.data.objects.get(stringname)
@@ -1213,13 +1202,13 @@ def mesh_create_basal(context, selected_objects):
     else:
         cons_print(f"Currently does not work :(")
         return False
-    #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
-    newname = selected_objects[0].name + "basal_region"
-    reference_copy = copy_object(selected_objects[0].name, newname)
+    selected_objects = context.selected_objects
+    # Find object with mean volume and create a copy of it as a reference object to create the reference basal region from.
+    reference_copy = copy_object(context.scene.reference_object_name, 'basal_region')
     # Deselect objects.
     for obj in selected_objects: obj.select_set(False)
     # Operations to create basal region of the ventricle.
-    basal_regions = create_basal_region_for_object(context, reference_copy, selected_objects[0].name)
+    basal_regions = create_basal_region_for_object(context, reference_copy)
     if not basal_regions: 
         cons_print(f"Error during the creation of the basal regions.")
         return False # If an error ocurred during creation of basal region, dont continue.
@@ -1228,11 +1217,11 @@ def mesh_create_basal(context, selected_objects):
     for obj in selected_objects: obj.select_set(True)
     for basal in basal_regions:  
         basal.select_set(False)
-        basal.hide_set(False)
+        basal.hide_set(True)
     # Remove old basal region objects.
     if context.scene.approach == 5: bpy.data.objects.remove(bpy.data.objects["basal_ref"], do_unlink=True)
-    bpy.data.objects.remove(bpy.data.objects[newname], do_unlink=True)
-    bpy.data.objects.remove(bpy.data.objects[newname + "_poisson"], do_unlink=True)
+    bpy.data.objects.remove(bpy.data.objects["basal_region"], do_unlink=True)
+    bpy.data.objects.remove(bpy.data.objects["basal_region_poisson"], do_unlink=True)
     return basal_regions
 
 def find_reference_ventricle_max(objects): 
@@ -1502,75 +1491,52 @@ class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
             obj.select_set(True)
         #shift_shrinkwrap_topology_batch(context)
         return {'FINISHED'} 
-
-def select_lower_regions(region):
-    """ Selects the lowest mesh of the basal region"""
-    name = region.name
-    if not name in bpy.data.objects: # Check if all necessary basal regions are present.
-        cons_print(f"Missing following basal region: {name}")
-        return False       
-    else:  
-        curr_basal = bpy.data.objects[name]
-        # Unhide current basal region and use it as active object.
-        curr_basal.hide_set(False)
-        curr_basal.select_set(True)
-        bpy.context.view_layer.objects.active = curr_basal
-        # Select only lower basal edge loop vertex group.
-        deselect_object_vertices(curr_basal)
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.object.vertex_group_set_active(group=str("lower_basal_edge_loop"))
-        bpy.ops.object.vertex_group_select()
-        bpy.ops.object.mode_set(mode='OBJECT')
-        # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
-        curr_basal.select_set(False)
-        #curr_basal.hide_set(True)
-
-def mesh_connect_apical_and_basal_pairs(context):
-    """Connect apical and basal region of the ventricle pairs"""
-    # Here there should only be basal regions that are selected. 
+        
+def mesh_connect_apical_and_basal(context):
+    """Connect apical and basal region of ventricle"""
+    cons_print("Connecting apical and basal regions...")
     selected_objects = context.selected_objects
-    finished_name = []
+    # Initialize names for basal regions.
+    if context.scene.approach == 5: names = ["basal_0", "basal_1", "basal_2", "basal_3", "basal_4"]
+    else: names = ["basal_0"]
+    basal_regions = []
+    # Set up basal regions so that the lower edge loop is selected.
+    for name in names:
+        if not name in bpy.data.objects: # Check if all necessary basal regions are present.
+            cons_print(f"Missing following basal region: {name}")
+            return False       
+        else:  
+            curr_basal = bpy.data.objects[name]
+            basal_regions.append(curr_basal) # Add object to list of basal regions.
+            # Unhide current basal region and use it as active object.
+            curr_basal.hide_set(False)
+            curr_basal.select_set(True)
+            bpy.context.view_layer.objects.active = curr_basal
+            # Select only lower basal edge loop vertex group.
+            deselect_object_vertices(curr_basal)
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.object.vertex_group_set_active(group=str("lower_basal_edge_loop"))
+            bpy.ops.object.vertex_group_select()
+            bpy.ops.object.mode_set(mode='OBJECT')
+            # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
+            curr_basal.select_set(False)
+            curr_basal.hide_set(True)
+    # Create initial connection using a reference copy.
+    reference = copy_object(context.scene.reference_object_name, "reference")
+    if not combine_apical_and_basal_region(context, basal_regions, reference, selected_objects): return False
+    cleanup_basal_region(context) # Cleanup: Delete basal regions.
+    return True
 
-    # Checks if every basal region has a pair (file with the same name except no _basal at the end)
-    for obj in selected_objects:
-        if bpy.data.objects.get(obj.name[:-6]) is None :
-            cons_print(f"No matching ventricle found")
-            return None
-    
-    basal_region_names = [obj.name for obj in selected_objects]
-    apical_region_names = [obj.name[:-6] for obj in selected_objects] # Get a list of the matching apical regions for each item
-
-    for name in basal_region_names:
-        for obj in context.selected_objects:
-            obj.select_set(False)
-        cons_print(f"Connecting {name}")
-        obj = bpy.data.objects.get(name)
-        # Select only lower basal edge loop vertex group.
-        select_lower_regions(obj)
-
-        # Combine matching apical and basal region
-        combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
-        finished_name.append(name[:-6])
-
-    return True, finished_name
-
-def triangulate_object(obj):
-    me = obj.data
-    bm = bmesh.new()
-    bm.from_mesh(me)
-
-    bmesh.ops.triangulate(bm, faces=bm.faces[:])
-
-    # Finish up, write the bmesh back to the mesh
-    bm.to_mesh(me)
-    bm.free()
-
-# --- This function is where the bulk of the process happens. For every pair of basal and ventricle, this function is called and performs the connection and the smoothing
-def combine_apical_and_basal_region_pairs(context, basal, ventricle):
+def combine_apical_and_basal_region(context, basal_regions, reference, selected_objects):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
-    # Apply connecting operation for reference and save connecting edges used in the connection.
-    prepare_geometry_for_bridging_pairs(context, ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
-    edge_indices_bridge = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
+    # Deselect (and hide) all objects.
+    for obj in selected_objects: 
+        obj.select_set(False)  
+        obj.hide_set(True)
+    reference.select_set(False)
+    ## Apply connecting operation for reference and save connecting edges used in the connection.
+    prepare_geometry_for_bridging(reference, basal_regions[0]) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
+    edge_indices_bridge = bridge_edges_reference(context, reference) # Create initial connection between the upper apical and lower basal edge loop.
     inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
     edge_indices_triangulate = triangulate_connection(True, reference, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
     bpy.data.objects.remove(reference, do_unlink=True) # Cleanup: Remove reference object.
@@ -2064,6 +2030,19 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
             cons_print(error)
             self.report({'ERROR'}, error)
             return {'CANCELLED'}
+        ventricles = [bpy.data.objects[name] for name in ventricle_names if name in bpy.data.objects]
+        error = check_pipeline_triangulated(context, ventricles)
+        # reselect all the ventricles
+        for obj in ventricles:
+            obj.select_set(True)
+
+        # Unshift everything afterwards
+        unshift_everything_longitudinally(context,context.selected_objects, shift_distances)
+
+        if error:
+            cons_print(error)
+            self.report({'ERROR'}, error)
+            return {'CANCELLED'}
         return{'FINISHED'} 
 
 def cleanup_basal_region(context):
@@ -2512,8 +2491,14 @@ class PANEL_Setup_Variables(bpy.types.Panel):
         row = layout.row()
         layout.prop(context.scene, "final_sm_iter", text="Volume preserving smoothing iterations")
         row = layout.row()
-        row.label(text= "Basal Smoothing Variables")
+        layout.prop(context.scene, "con_fade_percentage", text="Smoothing fade-out share of apical height")
         row = layout.row()
+        layout.prop(context.scene, "final_sm_iter", text="Volume preserving smoothing iterations")
+        row = layout.row()
+        layout.prop(context.scene, "con_fade_percentage", text="Smoothing fade-out share of apical height")
+        row = layout.row()
+        row = layout.row()
+        row.label(text= "Basal Smoothing Variables")
         layout.prop(context.scene, "basal_sm_factor", text="Basal region smoothing factor")
         row = layout.row()
         layout.prop(context.scene, "basal_sm_iter", text="Basal region smoothing iterations")
@@ -3549,71 +3534,75 @@ def register():
     bpy.types.Scene.mitral_ref = bpy.props.IntProperty(name="Reference point used to track the movement of the mitral valve")
     bpy.types.Scene.aorta_ref = bpy.props.IntProperty(name="Reference point used to track the movement of the aortic valve")
     # Position variables.
-    bpy.types.Scene.pos_top = bpy.props.FloatVectorProperty(name="Top position", default = (0,0,1))
-    bpy.types.Scene.pos_bot = bpy.props.FloatVectorProperty(name="Top position", default = (0,0,0))
-    bpy.types.Scene.pos_septum = bpy.props.FloatVectorProperty(name="Top position", default = (0,1,0))
+    "pos_top": bpy.props.FloatVectorProperty(name="Top position", default=(0, 0, 1)),
+    "pos_bot": bpy.props.FloatVectorProperty(name="Bottom position", default=(0, 0, 0)),
+    "pos_septum": bpy.props.FloatVectorProperty(name="Septum position", default=(0, 1, 0)),
+    # Settings log. Not drawn in any panel: the nodes the user picked before 'Translate and
+    # rotate' overwrote pos_top/pos_bot/pos_septum, plus the transformation it applied.
+    "pos_top_selected": bpy.props.FloatVectorProperty(name="Selected top position", default=(0, 0, 0)),
+    "pos_bot_selected": bpy.props.FloatVectorProperty(name="Selected bottom position", default=(0, 0, 0)),
+    "pos_septum_selected": bpy.props.FloatVectorProperty(name="Selected septum position", default=(0, 0, 0)),
+    "last_rotation_angles": bpy.props.FloatVectorProperty(name="Angles of the last rotation in radians", default=(0, 0, 0)),
+    "last_rotation_translation": bpy.props.FloatVectorProperty(name="Translation of the last rotation", default=(0, 0, 0)),
+    "last_rotation_time": bpy.props.StringProperty(name="Time of the last rotation", default=""),
     # Mitral valve.
-    bpy.types.Scene.mitral_radius_long = bpy.props.FloatProperty(name="mitral_radius_long", default=6,  min = 0.01)
-    bpy.types.Scene.mitral_radius_small = bpy.props.FloatProperty(name="mitral_radius_small", default=3,  min = 0.01)
-    bpy.types.Scene.translation_mitral = bpy.props.FloatVectorProperty(name="Aortic valve translation", default = (0,0,1))
-    bpy.types.Scene.angle_mitral = bpy.props.FloatVectorProperty(name="Aortic valve rotation", default = (0,0,0))
+    "mitral_radius_long": bpy.props.FloatProperty(name="mitral_radius_long", default=6, min=0.01),
+    "mitral_radius_small": bpy.props.FloatProperty(name="mitral_radius_small", default=3, min=0.01),
+    "translation_mitral": bpy.props.FloatVectorProperty(name="Mitral valve translation", default=(0, 0, 1)),
+    "angle_mitral": bpy.props.FloatVectorProperty(name="Mitral valve rotation", default=(0, 0, 0)),
     # Aortic valve.
-    bpy.types.Scene.aortic_radius = bpy.props.FloatProperty(name="aortic_radius", default=2,  min = 0.01)
-    bpy.types.Scene.translation_aortic = bpy.props.FloatVectorProperty(name="Aortic valve translation", default = (0,0,1))
-    bpy.types.Scene.angle_aortic = bpy.props.FloatVectorProperty(name="Aortic valve rotation", default = (0,0,0))
+    "aortic_radius": bpy.props.FloatProperty(name="aortic_radius", default=2, min=0.01),
+    "translation_aortic": bpy.props.FloatVectorProperty(name="Aortic valve translation", default=(0, 0, 1)),
+    "angle_aortic": bpy.props.FloatVectorProperty(name="Aortic valve rotation", default=(0, 0, 0)),
     # Support structure.
-    bpy.types.Scene.ref_minima = bpy.props.FloatVectorProperty(name="Minima of reference object", default = (0,0,0))
-    bpy.types.Scene.ref_maxima = bpy.props.FloatVectorProperty(name="Maxima of reference object", default = (0,0,1))
+    "ref_minima": bpy.props.FloatVectorProperty(name="Minima of reference object", default=(0, 0, 0)),
+    "ref_maxima": bpy.props.FloatVectorProperty(name="Maxima of reference object", default=(0, 0, 1)),
     # Cutting plane variables.
-    bpy.types.Scene.remove_basal_threshold = bpy.props.FloatProperty(name="Threshold for the removal of the basal region", default=28.5,  min = 0)
-    bpy.types.Scene.height_plane = bpy.props.FloatProperty(name="Cut-off value for the creation of the reference basal region", default=40,  min = 0.01)
-    bpy.types.Scene.min_valves = bpy.props.FloatProperty(name="Minimal z-value of valves", default=45)
+    "remove_basal_threshold": bpy.props.FloatProperty(name="Threshold for the removal of the basal region", default=28.5, min=0),
+    "height_plane": bpy.props.FloatProperty(name="Cut-off value for the creation of the reference basal region", default=40, min=0.01),
+    "min_valves": bpy.props.FloatProperty(name="Minimal z-value of valves", default=45),
     # Approach selection.
-    bpy.types.Scene.approach = bpy.props.IntProperty(name="Chosen modeling approach", default=3, min = 3, max = 5)
-    bpy.types.Scene.mean_reference = bpy.props.BoolProperty(name="Mean volume as reference", default=True)
-    # Possion algorithm.
-    bpy.types.Scene.poisson_depth = bpy.props.IntProperty(name="Depth of possion algorithm", default=10,  min = 1)
+    "approach": bpy.props.IntProperty(name="Chosen modeling approach", default=3, min=3, max=5),
+    "mean_reference": bpy.props.BoolProperty(name="Mean volume as reference", default=True),
+    # Poisson algorithm.
+    "poisson_depth": bpy.props.IntProperty(name="Depth of poisson algorithm", default=10, min=1),
     # Interpolation variables.
-    bpy.types.Scene.time_rr = bpy.props.FloatProperty(name="Time RR-duration", default=0.6,  min = 0.01)
-    bpy.types.Scene.time_diastole = bpy.props.FloatProperty(name="Time diastole", default=0.35,  min = 0.01) 
-    bpy.types.Scene.frames_ventricle = bpy.props.IntProperty(name="Amount of frames ventricle after interpolation", default=10,  min = 10)
+    "time_rr": bpy.props.FloatProperty(name="Time RR-duration", default=0.6, min=0.01),
+    "time_diastole": bpy.props.FloatProperty(name="Time diastole", default=0.35, min=0.01),
+    "frames_ventricle": bpy.props.IntProperty(name="Amount of frames ventricle after interpolation", default=10, min=10),
     # Connection algorithm variables.
-    bpy.types.Scene.reference_object_name = bpy.props.StringProperty(name="Name of the reference object", default = "ventricle_0")
-    bpy.types.Scene.inset_faces_refinement_steps = bpy.props.IntProperty(name="Refinement steps when insetting faces in the connection algorithm", default=1, min=1)
-    bpy.types.Scene.connection_twist = bpy.props.IntProperty(name="Twist for bridging algorithm in connection", default=0)
-    bpy.types.Scene.max_con_sm_iter = bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min = 5)
-    bpy.types.Scene.min_con_sm_iter = bpy.props.IntProperty(name="Minimum smoothing iterations for the smoothing of the connection between basal and apical region", default=2, min = 0)
-    bpy.types.Scene.sm_reps = bpy.props.IntProperty(name="Repetitions of reselection and smoothing application when smoothing basal and apical region", default=3, min = 0)
-    bpy.types.Scene.basal_sm_factor = bpy.props.FloatProperty(name="Basal Region Smoothing Factor", default=0.5)
-    bpy.types.Scene.basal_sm_iter = bpy.props.IntProperty(name="Basal Region Smoothing Iterations", default=5)
+    "reference_object_name": bpy.props.StringProperty(name="Name of the reference object", default="ventricle_0"),
+    "inset_faces_refinement_steps": bpy.props.IntProperty(name="Refinement steps when insetting faces in the connection algorithm", default=1, min=1),
+    "connection_twist": bpy.props.IntProperty(name="Twist for bridging algorithm in connection", default=0),
+    "max_con_sm_iter": bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min=5),
+    "min_con_sm_iter": bpy.props.IntProperty(name="Minimum smoothing iterations for the smoothing of the connection between basal and apical region", default=2, min=0),
+    "sm_reps": bpy.props.IntProperty(name="Repitions of reselection and smoothing application when smoothing basal and apical region", default=3, min=0),
+    "con_fade_percentage": bpy.props.FloatProperty(name="Share of the apical height over which the smoothing of the connection fades out below the cut", default=20.0, min=0.1, max=100.0, subtype='PERCENTAGE'),
+    "final_sm_iter": bpy.props.IntProperty(name="Volume preserving smoothing iterations applied to the whole ventricle except the valves", default=10, min=0),
     # Import variables.
-    bpy.types.Scene.ventricle_import_dir = bpy.props.StringProperty(
-        name="Import folder",
-        description="Folder to import the ventricle STL dataset",
-        subtype='DIR_PATH',
-        default="//",
-    )
-
+    "ventricle_import_dir": bpy.props.StringProperty(name="Import folder", description="Folder to import the ventricle STL dataset", subtype='DIR_PATH', default="//"),
     # Export / CFD pipeline variables.
-    bpy.types.Scene.ventricle_export_dir = bpy.props.StringProperty(
-        name="Export folder",
-        description="Folder to export for ventricle connectivity/coordinates and STL export",
-        subtype='DIR_PATH',
-        default="//",
-    )
-    
-    bpy.types.Scene.plot_input_path = bpy.props.StringProperty(
-        name = "Input directory for plotting",
-        description="Directory for plotting input",
-        subtype="DIR_PATH",
-        default="//",
-    )
-    
-    # Register UI-classes for Panels and functions.
-    for c in classes: bpy.utils.register_class(c)
-    # Register Development UI-classes.
-    if dev_env_tools: 
-        for c in dev_classes: bpy.utils.register_class(c)
+    "ventricle_export_dir": bpy.props.StringProperty(name="Export folder", description="Folder to export for ventricle connectivity/coordinates and STL export", subtype='DIR_PATH', default="//"),
+    "plot_input_path": bpy.props.StringProperty(name="Processed geometries", description="Folder with the processed (reconstructed) geometries from this pipeline, to compare against the raw data. If empty, the Export folder is used", subtype="DIR_PATH", default="//"),
+    # Live volume-curve comparison (compare the current selection instead of an exported folder).
+    "live_compare": bpy.props.BoolProperty(name="Live comparison", description="Compare the currently selected, not-yet-exported ventricle objects directly against the raw data, instead of a processed-geometries folder", default=False),
+    "live_delete_temp": bpy.props.BoolProperty(name="Delete temp after showing", description="In live mode, delete the per-click temporary Connectivity folder after the plot is shown. If off, temp folders are kept for the session and cleared on Blender exit", default=False),
+}
+
+def register(): # Register classes from scene_properties.
+    for name, prop in scene_properties.items():
+        setattr(bpy.types.Scene, name, prop)
+    for c in classes:
+        bpy.utils.register_class(c)
+    if dev_env_tools:
+        for c in dev_classes:
+            bpy.utils.register_class(c)
+    if session_log:
+        try:
+            session_log.start_session_logging(".".join(str(v) for v in bl_info["version"]))
+        except Exception as e:
+            print(f"[GVR] cannot start session logging: {e}")
+
 
 def unregister(): # Unregister classes.
     if session_log: # Before delattr, so no timer tick reads a scene property that is already gone.
