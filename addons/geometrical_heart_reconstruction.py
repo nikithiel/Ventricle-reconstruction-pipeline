@@ -3478,39 +3478,6 @@ def BvH_transform(source,target):
         if loc:
             v.co = source.matrix_world.inverted() @ loc
 
-class MESH_OT_track_vert_movement(bpy.types.Operator):
-    """Track movement of vertices between all the frames"""
-    bl_idname = 'heart.track_vertice'
-    bl_label = 'Track Vertice'
-    def execute(self,context):
-        scene = context.scene
-        view_layer = context.view_layer
-
-        selected_objects = context.selected_objects
-        coordinates = []
-
-        for obj in selected_objects:
-            if obj.mode == 'EDIT':
-                bm = bmesh.from_edit_mesh(obj.data)
-                for v in bm.verts:
-                    if v.index == 861:
-                        cons_print(f'Vertex 501 of {obj.name} is at coordinate: {v.co}')
-                        coordinates.append(v.co)
-            else:
-                cons_print('Not in edit mode')
-
-        cons_print(coordinates)
-        """obj = bpy.context.object
-        if obj.mode == 'EDIT':
-            bm = bmesh.from_edit_mesh(obj.data)
-            for v in bm.verts:
-                if v.select:
-                    cons_print(f'Vertex {v.index} is at coordinate: {v.co}')
-        else:
-            cons_print('None selected or not in Edit mode')"""
-        
-        return {'FINISHED'}
-
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 
