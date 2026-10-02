@@ -151,21 +151,14 @@ Every step triangulates the geometry it creates, so all reconstructed objects (v
     3.1 Select the basal regions to be connected with its' matching ventricle\
     3.2. Press button 'Connect basal and apical regions' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
-<<<<<<< HEAD
     This connects every basal for all matching apical region ventricle objects and connects them with the looptools_bridge function from the Blender addon Looptools. Since this connection creates long quadrangular faces, the faces need to be split using an integrated insetting algorithm leading to faces where the deviation of edge lengths are reduced. After that the faces are triangulated and iteratively smoothed. These processes are done for every basal and apical region ventricle objects.
     In this process, the valve connection is always at a fixed position, therefore no selection is necessary for the next step.
-
-<<<<<<< HEAD
-=======
     This creates a copy of the reference basal region for all apical region ventricle objects and connects them with the looptools_bridge function from the Blender addon Looptools. Since this connection creates long quadrangular faces, the faces need to be split using an integrated insetting algorithm leading to faces where the deviation of edge lengths are reduced. After that the faces are triangulated and iteratively smoothed. These processes are done for the reference ventricle object first and then copied to the other ventricles to remain node-connectivity.\
     \
     The smoothing works on weights rather than on a node selection. Every node above the removal threshold is smoothed at full strength, below it the strength fades out with a cosine (see 'Smoothing fade-out share of apical height'). A hard selection border would leave a heavily smoothed node next to an untouched one and visibly kink the surface. The nodes of the mitral and aortic valve discs are pinned and never move. Finally the whole ventricle, again except the valve discs, is relaxed with a volume preserving Taubin pass.
->>>>>>> 068bef0 (Triangulate every reconstructed mesh at the source)
-=======
     This creates a copy of the reference basal region for all apical region ventricle objects and connects them with the looptools_bridge function from the Blender addon Looptools. Since this connection creates long quadrangular faces, the faces need to be split using an integrated insetting algorithm leading to faces where the deviation of edge lengths are reduced. After that the faces are triangulated and iteratively smoothed. These processes are done for the reference ventricle object first and then copied to the other ventricles to remain node-connectivity.\
     \
     The smoothing works on weights rather than on a node selection. Every node above the removal threshold is smoothed at full strength, below it the strength fades out with a cosine (see 'Smoothing fade-out share of apical height'). A hard selection border would leave a heavily smoothed node next to an untouched one and visibly kink the surface. The nodes of the mitral and aortic valve discs are pinned and never move. Finally the whole ventricle, again except the valve discs, is relaxed with a volume preserving Taubin pass.
->>>>>>> c90238ea31d42595c389335a48d248ed8498d580
 4. Add atrium, aorta and valves\
     4.1. Press button 'Add atrium, aorta and valves' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
