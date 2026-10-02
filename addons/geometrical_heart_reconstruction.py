@@ -3534,60 +3534,72 @@ def register():
     bpy.types.Scene.mitral_ref = bpy.props.IntProperty(name="Reference point used to track the movement of the mitral valve")
     bpy.types.Scene.aorta_ref = bpy.props.IntProperty(name="Reference point used to track the movement of the aortic valve")
     # Position variables.
-    "pos_top": bpy.props.FloatVectorProperty(name="Top position", default=(0, 0, 1)),
-    "pos_bot": bpy.props.FloatVectorProperty(name="Bottom position", default=(0, 0, 0)),
-    "pos_septum": bpy.props.FloatVectorProperty(name="Septum position", default=(0, 1, 0)),
-    # Settings log. Not drawn in any panel: the nodes the user picked before 'Translate and
-    # rotate' overwrote pos_top/pos_bot/pos_septum, plus the transformation it applied.
-    "pos_top_selected": bpy.props.FloatVectorProperty(name="Selected top position", default=(0, 0, 0)),
-    "pos_bot_selected": bpy.props.FloatVectorProperty(name="Selected bottom position", default=(0, 0, 0)),
-    "pos_septum_selected": bpy.props.FloatVectorProperty(name="Selected septum position", default=(0, 0, 0)),
-    "last_rotation_angles": bpy.props.FloatVectorProperty(name="Angles of the last rotation in radians", default=(0, 0, 0)),
-    "last_rotation_translation": bpy.props.FloatVectorProperty(name="Translation of the last rotation", default=(0, 0, 0)),
-    "last_rotation_time": bpy.props.StringProperty(name="Time of the last rotation", default=""),
+    bpy.types.Scene.pos_top = bpy.props.FloatVectorProperty(name="Top position", default = (0,0,1))
+    bpy.types.Scene.pos_bot = bpy.props.FloatVectorProperty(name="Top position", default = (0,0,0))
+    bpy.types.Scene.pos_septum = bpy.props.FloatVectorProperty(name="Top position", default = (0,1,0))
+
     # Mitral valve.
-    "mitral_radius_long": bpy.props.FloatProperty(name="mitral_radius_long", default=6, min=0.01),
-    "mitral_radius_small": bpy.props.FloatProperty(name="mitral_radius_small", default=3, min=0.01),
-    "translation_mitral": bpy.props.FloatVectorProperty(name="Mitral valve translation", default=(0, 0, 1)),
-    "angle_mitral": bpy.props.FloatVectorProperty(name="Mitral valve rotation", default=(0, 0, 0)),
+    bpy.types.Scene.mitral_radius_long = bpy.props.FloatProperty(name="mitral_radius_long", default=6,  min = 0.01)
+    bpy.types.Scene.mitral_radius_small = bpy.props.FloatProperty(name="mitral_radius_small", default=3,  min = 0.01)
+    bpy.types.Scene.translation_mitral = bpy.props.FloatVectorProperty(name="Aortic valve translation", default = (0,0,1))
+    bpy.types.Scene.angle_mitral = bpy.props.FloatVectorProperty(name="Aortic valve rotation", default = (0,0,0))
     # Aortic valve.
-    "aortic_radius": bpy.props.FloatProperty(name="aortic_radius", default=2, min=0.01),
-    "translation_aortic": bpy.props.FloatVectorProperty(name="Aortic valve translation", default=(0, 0, 1)),
-    "angle_aortic": bpy.props.FloatVectorProperty(name="Aortic valve rotation", default=(0, 0, 0)),
+    bpy.types.Scene.aortic_radius = bpy.props.FloatProperty(name="aortic_radius", default=2,  min = 0.01)
+    bpy.types.Scene.translation_aortic = bpy.props.FloatVectorProperty(name="Aortic valve translation", default = (0,0,1))
+    bpy.types.Scene.angle_aortic = bpy.props.FloatVectorProperty(name="Aortic valve rotation", default = (0,0,0))
     # Support structure.
-    "ref_minima": bpy.props.FloatVectorProperty(name="Minima of reference object", default=(0, 0, 0)),
-    "ref_maxima": bpy.props.FloatVectorProperty(name="Maxima of reference object", default=(0, 0, 1)),
+    bpy.types.Scene.ref_minima = bpy.props.FloatVectorProperty(name="Minima of reference object", default = (0,0,0))
+    bpy.types.Scene.ref_maxima = bpy.props.FloatVectorProperty(name="Maxima of reference object", default = (0,0,1))
     # Cutting plane variables.
-    "remove_basal_threshold": bpy.props.FloatProperty(name="Threshold for the removal of the basal region", default=28.5, min=0),
-    "height_plane": bpy.props.FloatProperty(name="Cut-off value for the creation of the reference basal region", default=40, min=0.01),
-    "min_valves": bpy.props.FloatProperty(name="Minimal z-value of valves", default=45),
+    bpy.types.Scene.remove_basal_threshold = bpy.props.FloatProperty(name="Threshold for the removal of the basal region", default=28.5,  min = 0)
+    bpy.types.Scene.height_plane = bpy.props.FloatProperty(name="Cut-off value for the creation of the reference basal region", default=40,  min = 0.01)
+    bpy.types.Scene.min_valves = bpy.props.FloatProperty(name="Minimal z-value of valves", default=45)
     # Approach selection.
-    "approach": bpy.props.IntProperty(name="Chosen modeling approach", default=3, min=3, max=5),
-    "mean_reference": bpy.props.BoolProperty(name="Mean volume as reference", default=True),
-    # Poisson algorithm.
-    "poisson_depth": bpy.props.IntProperty(name="Depth of poisson algorithm", default=10, min=1),
+    bpy.types.Scene.approach = bpy.props.IntProperty(name="Chosen modeling approach", default=3, min = 3, max = 5)
+    bpy.types.Scene.mean_reference = bpy.props.BoolProperty(name="Mean volume as reference", default=True)
+    # Possion algorithm.
+    bpy.types.Scene.poisson_depth = bpy.props.IntProperty(name="Depth of possion algorithm", default=10,  min = 1)
     # Interpolation variables.
-    "time_rr": bpy.props.FloatProperty(name="Time RR-duration", default=0.6, min=0.01),
-    "time_diastole": bpy.props.FloatProperty(name="Time diastole", default=0.35, min=0.01),
-    "frames_ventricle": bpy.props.IntProperty(name="Amount of frames ventricle after interpolation", default=10, min=10),
+    bpy.types.Scene.time_rr = bpy.props.FloatProperty(name="Time RR-duration", default=0.6,  min = 0.01)
+    bpy.types.Scene.time_diastole = bpy.props.FloatProperty(name="Time diastole", default=0.35,  min = 0.01) 
+    bpy.types.Scene.frames_ventricle = bpy.props.IntProperty(name="Amount of frames ventricle after interpolation", default=10,  min = 10)
     # Connection algorithm variables.
-    "reference_object_name": bpy.props.StringProperty(name="Name of the reference object", default="ventricle_0"),
-    "inset_faces_refinement_steps": bpy.props.IntProperty(name="Refinement steps when insetting faces in the connection algorithm", default=1, min=1),
-    "connection_twist": bpy.props.IntProperty(name="Twist for bridging algorithm in connection", default=0),
-    "max_con_sm_iter": bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min=5),
-    "min_con_sm_iter": bpy.props.IntProperty(name="Minimum smoothing iterations for the smoothing of the connection between basal and apical region", default=2, min=0),
-    "sm_reps": bpy.props.IntProperty(name="Repitions of reselection and smoothing application when smoothing basal and apical region", default=3, min=0),
-    "con_fade_percentage": bpy.props.FloatProperty(name="Share of the apical height over which the smoothing of the connection fades out below the cut", default=20.0, min=0.1, max=100.0, subtype='PERCENTAGE'),
-    "final_sm_iter": bpy.props.IntProperty(name="Volume preserving smoothing iterations applied to the whole ventricle except the valves", default=10, min=0),
+    bpy.types.Scene.reference_object_name = bpy.props.StringProperty(name="Name of the reference object", default = "ventricle_0")
+    bpy.types.Scene.inset_faces_refinement_steps = bpy.props.IntProperty(name="Refinement steps when insetting faces in the connection algorithm", default=1, min=1)
+    bpy.types.Scene.connection_twist = bpy.props.IntProperty(name="Twist for bridging algorithm in connection", default=0)
+    bpy.types.Scene.max_con_sm_iter = bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min = 5)
+    bpy.types.Scene.min_con_sm_iter = bpy.props.IntProperty(name="Minimum smoothing iterations for the smoothing of the connection between basal and apical region", default=2, min = 0)
+    bpy.types.Scene.sm_reps = bpy.props.IntProperty(name="Repetitions of reselection and smoothing application when smoothing basal and apical region", default=3, min = 0)
+    bpy.types.Scene.basal_sm_factor = bpy.props.FloatProperty(name="Basal Region Smoothing Factor", default=0.5)
+    bpy.types.Scene.basal_sm_iter = bpy.props.IntProperty(name="Basal Region Smoothing Iterations", default=5)
     # Import variables.
-    "ventricle_import_dir": bpy.props.StringProperty(name="Import folder", description="Folder to import the ventricle STL dataset", subtype='DIR_PATH', default="//"),
+    bpy.types.Scene.ventricle_import_dir = bpy.props.StringProperty(
+        name="Import folder",
+        description="Folder to import the ventricle STL dataset",
+        subtype='DIR_PATH',
+        default="//",
+    )
+
     # Export / CFD pipeline variables.
-    "ventricle_export_dir": bpy.props.StringProperty(name="Export folder", description="Folder to export for ventricle connectivity/coordinates and STL export", subtype='DIR_PATH', default="//"),
-    "plot_input_path": bpy.props.StringProperty(name="Processed geometries", description="Folder with the processed (reconstructed) geometries from this pipeline, to compare against the raw data. If empty, the Export folder is used", subtype="DIR_PATH", default="//"),
-    # Live volume-curve comparison (compare the current selection instead of an exported folder).
-    "live_compare": bpy.props.BoolProperty(name="Live comparison", description="Compare the currently selected, not-yet-exported ventricle objects directly against the raw data, instead of a processed-geometries folder", default=False),
-    "live_delete_temp": bpy.props.BoolProperty(name="Delete temp after showing", description="In live mode, delete the per-click temporary Connectivity folder after the plot is shown. If off, temp folders are kept for the session and cleared on Blender exit", default=False),
-}
+    bpy.types.Scene.ventricle_export_dir = bpy.props.StringProperty(
+        name="Export folder",
+        description="Folder to export for ventricle connectivity/coordinates and STL export",
+        subtype='DIR_PATH',
+        default="//",
+    )
+    
+    bpy.types.Scene.plot_input_path = bpy.props.StringProperty(
+        name = "Input directory for plotting",
+        description="Directory for plotting input",
+        subtype="DIR_PATH",
+        default="//",
+    )
+    
+    # Register UI-classes for Panels and functions.
+    for c in classes: bpy.utils.register_class(c)
+    # Register Development UI-classes.
+    if dev_env_tools: 
+        for c in dev_classes: bpy.utils.register_class(c)
 
 def register(): # Register classes from scene_properties.
     for name, prop in scene_properties.items():
