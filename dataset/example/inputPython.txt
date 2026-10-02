@@ -1,0 +1,14 @@
+# Synthetic testcase (STL in mm, Doppler in cm/s)
+bpm_mv 70.0
+bpm_av 70.0
+
+# Ground truth (SI):
+A_mv_true 0.0004084070449666732
+d_mv_minor_true 0.02
+d_mv_major_true 0.026000000000000002
+A_av_true 0.0003141592653589793
+d_av_true 0.02
+
+# Notes:
+# - STL mesh units are mm (program converts mm^3 -> m^3 via /1e9)
+# - Doppler velocities are cm/s (program converts to m/s via /100)
