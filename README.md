@@ -116,18 +116,12 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     - Refinement steps for insetting faces: Amount of iterations of insetting faces during the connection algorithm
     - Maximum smoothing iterations: Used in smoothing the connection of basal and apical region. Highest (initial) smoothing value
     - Minimum smoothing iterations: Used in smoothing the connection of basal and apical region. Smallest smoothing value
-<<<<<<< HEAD
     - Smoothing repetitions: Used in smoothing the connection of basal and apical region. Amount of smoothing repetitions each with a wider node selection (all neighbours of previous selection are selected)
     - Smoothing repetitions: Used in smoothing the connection of basal and apical region. Amount of smoothing repetitions, each fading out over a wider band
     - Smoothing fade-out share of apical height: The connection smoothing acts at full strength on everything above the removal threshold and fades out below it, following a cosine. The fade-out height is this share of the distance from the threshold down to the apex, so it scales with the size of the ventricle. Larger values give a softer transition but smooth more of the apical measurement data (default 20 %)
     - Volume preserving smoothing iterations: Taubin smoothing of the whole ventricle except the valve discs, applied after the connection has been smoothed. It removes segmentation noise from the apical region, which the connection smoothing never reaches, without shrinking the volume. Set to 0 to disable it (default 10)
     - Basal region smoothing factor: Used in the smoothing process of the basal region for both the normal smoothing and laplacian smoothing as the lambda factor
     - Basal region smoothing iterations: How many iterations to be used during the smoothing process. If it's normal smoothing it's iterative cascading smoothing (performs n iterations and repeats for n-1 iterations until 0) and just one repeat for laplacian smoothing
-=======
-    - Smoothing repetitions: Used in smoothing the connection of basal and apical region. Amount of smoothing repetitions, each fading out over a wider band
-    - Smoothing fade-out share of apical height: The connection smoothing acts at full strength on everything above the removal threshold and fades out below it, following a cosine. The fade-out height is this share of the distance from the threshold down to the apex, so it scales with the size of the ventricle. Larger values give a softer transition but smooth more of the apical measurement data (default 20 %)
-    - Volume preserving smoothing iterations: Taubin smoothing of the whole ventricle except the valve discs, applied after the connection has been smoothed. It removes segmentation noise from the apical region, which the connection smoothing never reaches, without shrinking the volume. Set to 0 to disable it (default 10)
->>>>>>> 068bef0 (Triangulate every reconstructed mesh at the source)
 5. Select approach\
     5.1. In panel 'Geometric ventricle reconstrucion pipeline press button 'Select approach'\
     ![Image of the setup pipeline](/readme_images/Pipeline_button_five.png)\
