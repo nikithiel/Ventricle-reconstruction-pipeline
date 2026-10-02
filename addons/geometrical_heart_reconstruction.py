@@ -33,7 +33,6 @@ import matplotlib.pyplot as plt
 import multiprocessing as mp
 from pathlib import Path
 
-
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
 
@@ -1187,6 +1186,19 @@ def mesh_create_basal_batch(context):
             cons_print("No elements selected.")
             return False
     selected_objects = context.selected_objects
+    pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
+    pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
+
+    selected_names = [obj.name for obj in selected_objects]
+    selected_names = sorted(selected_names, key=get_frame_number)
+
+    for i in range(0,len(selected_names)):
+        obj = bpy.data.objects.get(selected_names[i])
+        if not update_value_for_translation(context, i, pos_matrix_mitral, pos_matrix_aortic): return{'CANCELLED'}
+        if not mesh_create_basal(context, [obj]): 
+            cons_print("FAILED")
+            return{'CANCELLED'}
+    # Selects all the objects for the next step
     for obj in selected_objects:
         stringname = obj.name + "_basal"
         basalobj = bpy.data.objects.get(stringname)
@@ -1197,18 +1209,17 @@ def mesh_create_basal_batch(context):
 def mesh_create_basal(context, selected_objects):
     """Create Basal Regions for each of the selected objects"""
     if len(selected_objects) == 1:
-        #bpy.types.Scene.reference_object_name = selected_objects[0].name
-        context.scene.reference_object_name = selected_objects[0].name
+        bpy.types.Scene.reference_object_name = selected_objects[0].name
     else:
         cons_print(f"Currently does not work :(")
         return False
-    selected_objects = context.selected_objects
-    # Find object with mean volume and create a copy of it as a reference object to create the reference basal region from.
-    reference_copy = copy_object(context.scene.reference_object_name, 'basal_region')
+    #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
+    newname = selected_objects[0].name + "basal_region"
+    reference_copy = copy_object(selected_objects[0].name, newname)
     # Deselect objects.
     for obj in selected_objects: obj.select_set(False)
     # Operations to create basal region of the ventricle.
-    basal_regions = create_basal_region_for_object(context, reference_copy)
+    basal_regions = create_basal_region_for_object(context, reference_copy, selected_objects[0].name)
     if not basal_regions: 
         cons_print(f"Error during the creation of the basal regions.")
         return False # If an error ocurred during creation of basal region, dont continue.
@@ -1217,11 +1228,11 @@ def mesh_create_basal(context, selected_objects):
     for obj in selected_objects: obj.select_set(True)
     for basal in basal_regions:  
         basal.select_set(False)
-        basal.hide_set(True)
+        basal.hide_set(False)
     # Remove old basal region objects.
     if context.scene.approach == 5: bpy.data.objects.remove(bpy.data.objects["basal_ref"], do_unlink=True)
-    bpy.data.objects.remove(bpy.data.objects["basal_region"], do_unlink=True)
-    bpy.data.objects.remove(bpy.data.objects["basal_region_poisson"], do_unlink=True)
+    bpy.data.objects.remove(bpy.data.objects[newname], do_unlink=True)
+    bpy.data.objects.remove(bpy.data.objects[newname + "_poisson"], do_unlink=True)
     return basal_regions
 
 def find_reference_ventricle_max(objects): 
@@ -3273,7 +3284,86 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
         cons_print(msg)
         self.report({'INFO'}, msg)
         return{"FINISHED"}
-            
+
+class MESH_OT_update_mitral_ref(bpy.types.Operator):
+    """Update the vertex ID for mitral valve reference"""
+    bl_idname = 'heart.update_mitral_ref'
+    bl_label = 'Update Mitral Reference Vertex'
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+        
+        selected_objects = context.selected_objects
+
+        for obj in selected_objects:
+            if obj.mode == 'EDIT':
+                bm = bmesh.from_edit_mesh(obj.data)
+                for v in bm.verts:
+                    if v.select:
+                        context.scene.mitral_ref = v.index
+            else:
+                cons_print('Not in edit mode')
+        return {"FINISHED"}
+    
+class MESH_OT_update_aorta_ref(bpy.types.Operator):
+    """Update the vertex ID for aortic valve reference"""
+    bl_idname = 'heart.update_aorta_ref'
+    bl_label = 'Update Mitral Reference Vertex'
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+        
+        selected_objects = context.selected_objects
+
+        for obj in selected_objects:
+            if obj.mode == 'EDIT':
+                bm = bmesh.from_edit_mesh(obj.data)
+                for v in bm.verts:
+                    if v.select:
+                        context.scene.aorta_ref = v.index
+            else:
+                cons_print('Not in edit mode')
+        return {"FINISHED"}
+
+class MESH_OT_store_ref_positions(bpy.types.Operator):
+    """Store the points of the the mitral and aortic reference vertices. It is stored within the session"""
+    bl_idname = 'heart.store_ref_positions'
+    bl_label = 'Stores reference vertices positions'
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+
+        selected_objects = context.selected_objects
+        selected_names = [obj.name for obj in selected_objects]
+        selected_names = sorted(selected_names, key=get_frame_number)
+
+        mitral_ref_ID = context.scene.mitral_ref
+        aortic_ref_ID = context.scene.aorta_ref
+        mitral_relative_positions = []
+        aortic_relative_positions = []
+
+        for name in selected_names:
+            obj = bpy.data.objects.get(name)
+            if obj.mode == 'EDIT':
+                bm = bmesh.from_edit_mesh(obj.data)
+                for v in bm.verts:
+                    if v.index == mitral_ref_ID:
+                        mitral_relative_positions.append(np.array(v.co))
+                    if v.index == aortic_ref_ID:
+                        aortic_relative_positions.append(np.array(v.co))
+            else:
+                cons_print('Not in edit mode')
+        
+        #cons_print(f"Value stored for mitral and aortic as {mitral_relative_positions[2]} and {aortic_relative_positions[2]} respectively")
+        #context.scene.mitral_positions = mitral_relative_positions
+        #context.scene.aortic_positions = aortic_relative_positions
+        
+        # Store the values in every object?
+        for obj in selected_objects:
+            obj["mitral_position_matrix"] = mitral_relative_positions
+            obj["aortic_position_matrix"] = aortic_relative_positions
+        cons_print("Positions stored")
+        return {"FINISHED"}
 # -------------------------------------------------------------------
 # Helpers for ventricle detection and STL export
 # -------------------------------------------------------------------
@@ -3596,24 +3686,15 @@ def register():
     )
     
     # Register UI-classes for Panels and functions.
+    for name, prop in scene_properties.items():
+        try:
+            setattr(bpy.types.Scene, name, prop)
+        except:
+            print("most likely already registered")
     for c in classes: bpy.utils.register_class(c)
     # Register Development UI-classes.
     if dev_env_tools: 
         for c in dev_classes: bpy.utils.register_class(c)
-
-def register(): # Register classes from scene_properties.
-    for name, prop in scene_properties.items():
-        setattr(bpy.types.Scene, name, prop)
-    for c in classes:
-        bpy.utils.register_class(c)
-    if dev_env_tools:
-        for c in dev_classes:
-            bpy.utils.register_class(c)
-    if session_log:
-        try:
-            session_log.start_session_logging(".".join(str(v) for v in bl_info["version"]))
-        except Exception as e:
-            print(f"[GVR] cannot start session logging: {e}")
 
 
 def unregister(): # Unregister classes.
