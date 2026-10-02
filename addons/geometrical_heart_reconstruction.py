@@ -45,15 +45,14 @@ except Exception as _session_log_error:
     print(f"[GVR] session_log unavailable: {_session_log_error}")
 
 scene = bpy.types.Scene
-
 dev_env_tools = True
 
+MITRAL_REF_VERTICE = 501
 # --- GENERAL USE FUNCTIONS --- #
 def _cons_rule(title):
     """Console separator so each button press forms one visually grouped block."""
     cons_print("")
     cons_print(f"===== {title} =====")
-
 
 def cons_print(data):
     """Print to console for button presses. Used for error messages, information outputs and warnings"""
@@ -642,11 +641,12 @@ def remove_multiple_basal_region(context):
     deleted_verts = remove_basal_region(context, reference_copy, []) # Remove in reference object
     for obj in selected_objects: remove_basal_region(context, obj, deleted_verts) 
     # Longitudinal shift of each ventricle to match reference object, reducing volume discrepancy between systole and diastole between raw data and reconstructed data.
-    #shift_ventricles_longitudinally(context, selected_objects)
+    shift_distances = shift_ventricles_longitudinally(context, selected_objects)
     context.scene.ref_maxima, context.scene.ref_minima = get_min_max(reference_copy)    
     # Cleanup.
     for obj in selected_objects: obj.select_set(True) # Reselect objects from original selection after main operations are executed.
     bpy.data.objects.remove(bpy.data.objects["reference"], do_unlink=True) # Remove reference object.
+    return shift_distances
 
 def remove_basal_region(context, obj, del_nodes):
     """Remove basal region of the ventricle using a threshold"""
@@ -762,15 +762,25 @@ def smooth_apical_region(obj, vg_orifice):
 
 def shift_ventricles_longitudinally(context, objects):
     """Shift ventricle to reference ventricle"""
+    shift_distances = []
     for obj in objects:
         max_obj_val, min_obj_val = get_min_max(obj)
-        shift_distance =  context.scene.remove_basal_threshold - max_obj_val[2] 
+        shift_distance =  context.scene.remove_basal_threshold - max_obj_val[2]
+        shift_distances.append(shift_distance) 
         obj.select_set(True)
         bpy.context.view_layer.objects.active = obj
         obj['long_shift'] = shift_distance
         bpy.context.object.location[2] = shift_distance
         bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
         obj.select_set(False)
+    return shift_distances
+
+def unshift_everything_longitudinally(context,objects,shift_distances):
+    mean_shift = np.mean(shift_distances)
+    meshes = bpy.data.meshes
+    for mesh in meshes:
+        for vertex in mesh.vertices:
+            vertex.co[2] -= mean_shift
 
 class MESH_OT_build_valves(bpy.types.Operator):
     """Create geometry for mitral and aortic valve"""
@@ -1229,7 +1239,6 @@ def mesh_create_basal(context, selected_objects):
     bpy.data.objects.remove(bpy.data.objects[newname + "_poisson"], do_unlink=True)
     return basal_regions
 
-
 def find_reference_ventricle_max(objects): 
     """Find reference object with the largest volume and return its name"""
     max_volume = -float('inf')
@@ -1242,7 +1251,6 @@ def find_reference_ventricle_max(objects):
             max_volume = volume
             reference_name = obj.name
     return reference_name
-
 
 def find_reference_ventricle_mean(objects): 
     """Find reference object with mean volume and return its name"""
@@ -1715,7 +1723,6 @@ def triangulate_connection(bool_ref, obj, ref_edge_indices):
         bpy.ops.object.mode_set(mode='OBJECT') # Change to object mode.
     return edges_vert_indices_tri
 
-
 def compute_smoothing_iteration_factor_connection(context, counter, volumelist):
     """Compute how strongly the connection between basal and apical region is smoothed.
 
@@ -2040,7 +2047,7 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
         # Remember the ventricles by name: mesh_connect_apical_and_basal() clears the selection, and the
         # guard below still needs to compare all frames against each other.
         ventricle_names = [obj.name for obj in find_ventricle_objects(context.selected_objects)]
-        remove_multiple_basal_region(context) # Remove old basal region.
+        shift_distances = remove_multiple_basal_region(context) # Remove old basal region.
         if not mesh_create_basal_batch(context): 
             print("Not working or not returning")
             return{'CANCELLED'}# Operations to create basal region of the ventricle containing valve orifices.
@@ -2050,6 +2057,13 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
         add_vessels_and_valves(context) # Add surrounding objects including aorta, atrium and valves.
         ventricles = [bpy.data.objects[name] for name in ventricle_names if name in bpy.data.objects]
         error = check_pipeline_triangulated(context, ventricles)
+        # reselect all the ventricles
+        for obj in ventricles:
+            obj.select_set(True)
+
+        # Unshift everything afterwards
+        unshift_everything_longitudinally(context,context.selected_objects, shift_distances)
+
         if error:
             cons_print(error)
             self.report({'ERROR'}, error)
@@ -2973,7 +2987,6 @@ def _qt_available():
             pass
     return False
 
-
 def _plot_python_exe():
     """Pick a Python that actually has matplotlib/numpy/scipy (and ideally PyQt5). This
     addon is normally run from a project venv exposed to Blender via PYTHONPATH, so PREFER
@@ -2998,7 +3011,6 @@ def _plot_python_exe():
             if os.path.isfile(cand):
                 return cand
     return os.path.join(sys.exec_prefix, "bin", "python.exe")  # Blender's bundled python
-
 
 def _launch_plot_subprocess(input_path, plot_input_dir, base_dir, interp_method,
                             save_csv=False, save_png="", delete_dir=""):
@@ -3045,7 +3057,6 @@ def _launch_plot_subprocess(input_path, plot_input_dir, base_dir, interp_method,
 
     return log_path
 
-
 def _report_volume_diff(inputsetting, plot_input_dir, rotated_dir):
     """Print the per-frame processed-vs-raw volume % difference (min/max) to the Blender
     console. derive_* prints the same numbers, but in the normal 'Show' path it runs in a
@@ -3060,7 +3071,6 @@ def _report_volume_diff(inputsetting, plot_input_dir, rotated_dir):
         return
     for line in format_volume_diff_lines(d):
         cons_print(line)
-
 
 class MESH_OT_plot_STL(bpy.types.Operator):
     """Display the plot"""
@@ -3420,6 +3430,87 @@ def export_object_to_stl(obj, filepath, depsgraph=None):
         f.write("endsolid\n")
 
     eval_obj.to_mesh_clear()
+
+class MESH_OT_object_transform(bpy.types.Operator):
+    """Reshape mesh object to preserve mesh connetivity and topology between objects. Currently uses the object with max mesh count as reference (WIP)"""
+    bl_idname = 'heart.object_transform'
+    bl_label = 'Object Transformation'
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+
+        # --- Remember original selection & active object, also which meshes were selected ---
+        selected_objects = context.selected_objects
+        
+        if len(selected_objects) == 0 or not selected_objects:
+            cons_print(f"No objects selected")
+            return False
+
+        max = 0
+        for a in selected_objects:
+            if len(bmesh.from_edit_mesh(a.data).verts) > max:
+                source = a
+                max = len(bmesh.from_edit_mesh(a.data).verts)
+        
+        cons_print(f"Object used as reference {source.name}")
+        
+        bpy.ops.object.mode_set(mode='OBJECT') 
+        
+        for obj in selected_objects:
+            if obj != source:
+                cons_print(f"current object target {obj.name}")
+                copied_source = copy_object(source.name, obj.name + "_transformed")
+                BvH_transform(copied_source,obj)
+                copied_source.data.update()
+        cons_print(f"Operation completed")    
+        return{"FINISHED"}
+
+def BvH_transform(source,target):
+    cons_print(f"source {source}")
+    cons_print(f"target {target}")
+    bvh = BVHTree.FromObject(target, bpy.context.evaluated_depsgraph_get())
+    
+    for v in source.data.vertices:
+        world_co = source.matrix_world @ v.co
+
+        loc, normal, index, dist = bvh.find_nearest(world_co)
+
+        if loc:
+            v.co = source.matrix_world.inverted() @ loc
+
+class MESH_OT_track_vert_movement(bpy.types.Operator):
+    """Track movement of vertices between all the frames"""
+    bl_idname = 'heart.track_vertice'
+    bl_label = 'Track Vertice'
+    def execute(self,context):
+        scene = context.scene
+        view_layer = context.view_layer
+
+        selected_objects = context.selected_objects
+        coordinates = []
+
+        for obj in selected_objects:
+            if obj.mode == 'EDIT':
+                bm = bmesh.from_edit_mesh(obj.data)
+                for v in bm.verts:
+                    if v.index == 861:
+                        cons_print(f'Vertex 501 of {obj.name} is at coordinate: {v.co}')
+                        coordinates.append(v.co)
+            else:
+                cons_print('Not in edit mode')
+
+        cons_print(coordinates)
+        """obj = bpy.context.object
+        if obj.mode == 'EDIT':
+            bm = bmesh.from_edit_mesh(obj.data)
+            for v in bm.verts:
+                if v.select:
+                    cons_print(f'Vertex {v.index} is at coordinate: {v.co}')
+        else:
+            cons_print('None selected or not in Edit mode')"""
+        
+        return {'FINISHED'}
+
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 
