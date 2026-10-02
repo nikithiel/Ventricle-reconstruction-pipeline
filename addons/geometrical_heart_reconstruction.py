@@ -25,6 +25,7 @@ import sys
 import subprocess
 import importlib.util
 import time
+import warnings
 
 import pycpd
 import matplotlib
@@ -35,7 +36,7 @@ from pathlib import Path
 
 
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
-from calculate_valve_diameters import main_calc_diameter
+from calculate_valve_diameters import main_calc_diameter, ValveInputError
 scene = bpy.types.Scene
 
 dev_env_tools = True
@@ -2985,100 +2986,51 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
     bl_label = 'Calculate Valve Diameter'
     
     def execute(self,context):
+        _cons_rule("Calculate valve radii")
         scene = context.scene
-        diam_dir_raw = bpy.path.abspath((scene.ventricle_import_dir or "").strip())
-        if not diam_dir_raw:
-            diam_dir_raw = "//"
-        cons_print(f"Currently calculating valve diameter")
-        
-        figs, res = main_calc_diameter(diam_dir_raw, 400)
-        
-        context.scene.mitral_radius_small = res[0] * 1000
-        context.scene.mitral_radius_long = res[1] * 1000
-        context.scene.aortic_radius = res[2] * 1000
-        
-        
-        return{"FINISHED"}      
 
-class MESH_OT_update_mitral_ref(bpy.types.Operator):
-    """Update the vertex ID for mitral valve reference"""
-    bl_idname = 'heart.update_mitral_ref'
-    bl_label = 'Update Mitral Reference Vertex'
-    def execute(self,context):
-        scene = context.scene
-        view_layer = context.view_layer
-        
-        selected_objects = context.selected_objects
+        # No silent fallback to '//': an unset import folder used to resolve to the
+        # .blend directory and fail somewhere deep inside the computation.
+        raw_dir = (scene.ventricle_import_dir or "").strip()
+        import_dir = bpy.path.abspath(raw_dir) if raw_dir else ""
+        if not os.path.isdir(import_dir):
+            msg = ("Calculate radii: set the 'Import folder' to the folder holding the "
+                   f"numbered ventricle STL frames (current value: '{raw_dir or '<empty>'}').")
+            cons_print(msg)
+            self.report({'ERROR'}, msg)
+            return {'CANCELLED'}
 
-        for obj in selected_objects:
-            if obj.mode == 'EDIT':
-                bm = bmesh.from_edit_mesh(obj.data)
-                for v in bm.verts:
-                    if v.select:
-                        context.scene.mitral_ref = v.index
-            else:
-                cons_print('Not in edit mode')
-        return {"FINISHED"}
-    
-class MESH_OT_update_aorta_ref(bpy.types.Operator):
-    """Update the vertex ID for aortic valve reference"""
-    bl_idname = 'heart.update_aorta_ref'
-    bl_label = 'Update Mitral Reference Vertex'
-    def execute(self,context):
-        scene = context.scene
-        view_layer = context.view_layer
-        
-        selected_objects = context.selected_objects
+        cons_print(f"Calculating valve radii from: {import_dir}")
 
-        for obj in selected_objects:
-            if obj.mode == 'EDIT':
-                bm = bmesh.from_edit_mesh(obj.data)
-                for v in bm.verts:
-                    if v.select:
-                        context.scene.aorta_ref = v.index
-            else:
-                cons_print('Not in edit mode')
-        return {"FINISHED"}
+        try:
+            # calculate_valve_diameters is bpy-free and reports through warnings.warn,
+            # which never reaches Blender's console -- collect and forward them here.
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                try:
+                    figs, res = main_calc_diameter(import_dir, 400)
+                finally:
+                    for w in caught:
+                        cons_print(f"Warning: {w.message}")
+        except ValveInputError as err:
+            cons_print("Calculate radii: cannot compute - please fix the inputs:")
+            for problem in err.errors:
+                cons_print(f"  - {problem}")
+            self.report({'ERROR'}, err.summary)
+            return {'CANCELLED'}
 
-class MESH_OT_store_ref_positions(bpy.types.Operator):
-    """Store the points of the the mitral and aortic reference vertices. It is stored within the session"""
-    bl_idname = 'heart.store_ref_positions'
-    bl_label = 'Stores reference vertices positions'
-    def execute(self,context):
-        scene = context.scene
-        view_layer = context.view_layer
+        # Reached on success only, so the scene keeps its previous radii on failure.
+        r_mv_small, r_mv_long, r_av = res[0] * 1000, res[1] * 1000, res[2] * 1000
+        scene.mitral_radius_small = r_mv_small
+        scene.mitral_radius_long = r_mv_long
+        scene.aortic_radius = r_av
 
-        selected_objects = context.selected_objects
-        selected_names = [obj.name for obj in selected_objects]
-        selected_names = sorted(selected_names, key=get_frame_number)
-
-        mitral_ref_ID = context.scene.mitral_ref
-        aortic_ref_ID = context.scene.aorta_ref
-        mitral_relative_positions = []
-        aortic_relative_positions = []
-
-        for name in selected_names:
-            obj = bpy.data.objects.get(name)
-            if obj.mode == 'EDIT':
-                bm = bmesh.from_edit_mesh(obj.data)
-                for v in bm.verts:
-                    if v.index == mitral_ref_ID:
-                        mitral_relative_positions.append(np.array(v.co))
-                    if v.index == aortic_ref_ID:
-                        aortic_relative_positions.append(np.array(v.co))
-            else:
-                cons_print('Not in edit mode')
-        
-        #cons_print(f"Value stored for mitral and aortic as {mitral_relative_positions[2]} and {aortic_relative_positions[2]} respectively")
-        #context.scene.mitral_positions = mitral_relative_positions
-        #context.scene.aortic_positions = aortic_relative_positions
-        
-        # Store the values in every object?
-        for obj in selected_objects:
-            obj["mitral_position_matrix"] = mitral_relative_positions
-            obj["aortic_position_matrix"] = aortic_relative_positions
-        cons_print("Positions stored")
-        return {"FINISHED"}
+        msg = (f"Calculate radii: MV small={r_mv_small:.3f} mm, "
+               f"MV long={r_mv_long:.3f} mm, AV={r_av:.3f} mm.")
+        cons_print(msg)
+        self.report({'INFO'}, msg)
+        return{"FINISHED"}
+            
 # -------------------------------------------------------------------
 # Helpers for ventricle detection and STL export
 # -------------------------------------------------------------------
