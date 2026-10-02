@@ -239,6 +239,10 @@ Temporary Items
 
 # Personal use
 /vol_plot
+<<<<<<< HEAD
 test.py
 plot.py
 GVR-Pipeline-spare.blend
+=======
+/dataset/*
+>>>>>>> 068bef0 (Triangulate every reconstructed mesh at the source)
