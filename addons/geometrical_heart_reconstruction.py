@@ -26,16 +26,12 @@ import subprocess
 import importlib.util
 import time
 import warnings
-
-import pycpd
 import matplotlib
 matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
-import multiprocessing as mp
-from pathlib import Path
 
 
-from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
+from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors,  format_volume_diff_lines, compute_frame_volume_diff
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
 
 try: # A broken settings log must never keep the addon from registering.
