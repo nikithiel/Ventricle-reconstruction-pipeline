@@ -1503,88 +1503,78 @@ class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
         #shift_shrinkwrap_topology_batch(context)
         return {'FINISHED'} 
         
-def mesh_connect_apical_and_basal(context):
-    """Connect apical and basal region of ventricle"""
-    cons_print("Connecting apical and basal regions...")
+def select_lower_regions(region):
+    """ Selects the lowest mesh of the basal region"""
+    name = region.name
+    if not name in bpy.data.objects: # Check if all necessary basal regions are present.
+        cons_print(f"Missing following basal region: {name}")
+        return False       
+    else:  
+        curr_basal = bpy.data.objects[name]
+        # Unhide current basal region and use it as active object.
+        curr_basal.hide_set(False)
+        curr_basal.select_set(True)
+        bpy.context.view_layer.objects.active = curr_basal
+        # Select only lower basal edge loop vertex group.
+        deselect_object_vertices(curr_basal)
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.object.vertex_group_set_active(group=str("lower_basal_edge_loop"))
+        bpy.ops.object.vertex_group_select()
+        bpy.ops.object.mode_set(mode='OBJECT')
+        # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
+        curr_basal.select_set(False)
+        #curr_basal.hide_set(True)
+
+def mesh_connect_apical_and_basal_pairs(context):
+    """Connect apical and basal region of the ventricle pairs"""
+    # Here there should only be basal regions that are selected. 
     selected_objects = context.selected_objects
-    # Initialize names for basal regions.
-    if context.scene.approach == 5: names = ["basal_0", "basal_1", "basal_2", "basal_3", "basal_4"]
-    else: names = ["basal_0"]
-    basal_regions = []
-    # Set up basal regions so that the lower edge loop is selected.
-    for name in names:
-        if not name in bpy.data.objects: # Check if all necessary basal regions are present.
-            cons_print(f"Missing following basal region: {name}")
-            return False       
-        else:  
-            curr_basal = bpy.data.objects[name]
-            basal_regions.append(curr_basal) # Add object to list of basal regions.
-            # Unhide current basal region and use it as active object.
-            curr_basal.hide_set(False)
-            curr_basal.select_set(True)
-            bpy.context.view_layer.objects.active = curr_basal
-            # Select only lower basal edge loop vertex group.
-            deselect_object_vertices(curr_basal)
-            bpy.ops.object.mode_set(mode='EDIT')
-            bpy.ops.object.vertex_group_set_active(group=str("lower_basal_edge_loop"))
-            bpy.ops.object.vertex_group_select()
-            bpy.ops.object.mode_set(mode='OBJECT')
-            # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
-            curr_basal.select_set(False)
-            curr_basal.hide_set(True)
-    # Create initial connection using a reference copy.
-    reference = copy_object(context.scene.reference_object_name, "reference")
-    if not combine_apical_and_basal_region(context, basal_regions, reference, selected_objects): return False
-    cleanup_basal_region(context) # Cleanup: Delete basal regions.
-    return True
+    finished_name = []
 
-def combine_apical_and_basal_region(context, basal_regions, reference, selected_objects):
+    # Checks if every basal region has a pair (file with the same name except no _basal at the end)
+    for obj in selected_objects:
+        if bpy.data.objects.get(obj.name[:-6]) is None :
+            cons_print(f"No matching ventricle found")
+            return None
+    
+    basal_region_names = [obj.name for obj in selected_objects]
+    apical_region_names = [obj.name[:-6] for obj in selected_objects] # Get a list of the matching apical regions for each item
+
+    for name in basal_region_names:
+        for obj in context.selected_objects:
+            obj.select_set(False)
+        cons_print(f"Connecting {name}")
+        obj = bpy.data.objects.get(name)
+        # Select only lower basal edge loop vertex group.
+        select_lower_regions(obj)
+
+        # Combine matching apical and basal region
+        combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
+        finished_name.append(name[:-6])
+
+    return True, finished_name
+
+def triangulate_object(obj):
+    me = obj.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+
+    bmesh.ops.triangulate(bm, faces=bm.faces[:])
+
+    # Finish up, write the bmesh back to the mesh
+    bm.to_mesh(me)
+    bm.free()
+
+# --- This function is where the bulk of the process happens. For every pair of basal and ventricle, this function is called and performs the connection and the smoothing
+def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
-    # Deselect (and hide) all objects.
-    for obj in selected_objects: 
-        obj.select_set(False)  
-        obj.hide_set(True)
-    reference.select_set(False)
-    ## Apply connecting operation for reference and save connecting edges used in the connection.
-    prepare_geometry_for_bridging(reference, basal_regions[0]) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
-    edge_indices_bridge = bridge_edges_reference(context, reference) # Create initial connection between the upper apical and lower basal edge loop.
+    # Apply connecting operation for reference and save connecting edges used in the connection.
+    prepare_geometry_for_bridging_pairs(context, ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
+    edge_indices_bridge = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
     inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
-    edge_indices_triangulate = triangulate_connection(True, reference, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
-    bpy.data.objects.remove(reference, do_unlink=True) # Cleanup: Remove reference object.
-    # Compute the frame of the end diastole. Necessary for interpolated mitral valve.
-    frame_EDV = round(context.scene.time_diastole / context.scene.time_rr *  context.scene.frames_ventricle) 
-    # Compute volume list for computation of the intensity of smoothing of the connection between basal and apical region.
-    volumelist = compute_volumes(selected_objects, False)
-    if volumelist.index(min(volumelist)) > volumelist.index(max(volumelist)) or volumelist.index(min(volumelist)) != 0: cons_print(f"Warning: Ventricles not sorted.") # If list is not sorted
-    ## Apply connecting-operation for remaining ventricle geometries.
-    for counter, obj in enumerate(selected_objects):
-        basal = basal_regions[get_valve_state_index(context, counter, frame_EDV)] # Choose basal region.
-        # Apply connecting operation from reference.
-        prepare_geometry_for_bridging(obj, basal) 
-        bridge_edges_ventricle(obj, edge_indices_bridge)
-        inset_faces_smooth(context)
-        # Remove faces before triangulation.
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_more()
-        bpy.ops.mesh.delete(type='ONLY_FACE') 
-        bpy.ops.object.mode_set(mode='OBJECT')
-        # Triangulate mesh.
-        triangulate_connection(False, obj, edge_indices_triangulate)        
-        # Add faces onto triangulation.
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.mesh.edge_face_add()
-        bpy.ops.object.mode_set(mode='OBJECT')
-        # edge_face_add() fills every face-less edge cycle in the whole mesh, so a cycle with more than
-        # three edges becomes an n-gon. Runs once per frame, so FIXED.
-        triangulate_mesh_object(obj, quad_method='FIXED', source="combine_apical_and_basal_region")
-        # Smooth connection dependent on which geometry is smoothed.
-        smoothing_iter_factor = compute_smoothing_iteration_factor_connection(context, counter, volumelist)
-        smooth_connection_and_basal_region(context, obj, smoothing_iter_factor)
-        obj.hide_set(True)  
-    for obj in selected_objects: obj.hide_set(False) # Cleanup: Unhide objects.
-    return True
-
+    edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
+    triangulate_object(ventricle) # Triangulate any remaining non-triangulated mesh that was between the connections
+    bpy.data.objects.remove(basal) # Cleanup: Remove reference object.
 def get_valve_state_index(context, counter, frame_EDV):
     """Return the index of the basal region to be used for the given timestep"""
     if context.scene.approach == 3 or context.scene.approach == 4: return 0
