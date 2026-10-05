@@ -303,6 +303,37 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
             make_custom_group(context,obj, exclude_groups=[0,3,6])
         smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
 
+def shift_shrinkwrap_topology_fullbody(context, matrices=None):
+    scene = context.scene
+    view_layer = context.view_layer
+    selected_objects = context.selected_objects
+
+    if not matrices:
+        pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
+        pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
+    else:
+        pos_matrix_mitral = matrices[0]
+        pos_matrix_aortic = matrices[1]
+
+    selected_names = [obj.name for obj in selected_objects]
+    selected_names = sorted(selected_names, key=get_frame_number)
+    
+    temp_name = selected_names[0]
+    for i in range(1,len(selected_names)):
+        source = bpy.data.objects.get(temp_name)
+        source_copy = copy_object(source.name, source.name + '_COPY')
+        target = bpy.data.objects.get(selected_names[i])
+
+        # --- Shift and shrinkwrap the body part --- #
+        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
+        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
+        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group="fullbody") # Shifts and then shrinkwraps 
+        translate_mesh(context, source_copy, shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position
+        
+        temp_name = selected_names[i]
+        bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
+        source_copy.name = temp_name # Rename reference object
+    
 def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body', use_axis=[0,0,0]):
     """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
     scene = context.scene
@@ -313,19 +344,25 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
         translate_mesh(context, source, shift, group=None)
     
     bpy.context.view_layer.objects.active = source
-    make_custom_group(context,source, exclude_groups=[0,3,6]) # 0 lower loop, 3 mitral, 6 aortic. [3,6] to pick everything except valves
+    if group=='body':
+        make_custom_group(context,source, exclude_groups=[0,3,6], name=group) # 0 lower loop, 3 mitral, 6 aortic. [3,6] to pick everything except valves
+    else:
+        make_custom_group(context,source, exclude_groups=[4,7], name=group) # 0 lower loop, 4 mitral, 7 aortic. [3,6] to pick everything except valves
     # Here we add then apply modifiers to the copied object that makes it shrinkwrap around the target
     modifier = source.modifiers.new(name="shrinkwrap", type='SHRINKWRAP')
     modifier.target = target
     modifier.wrap_method = shrinkwrap
     modifier.vertex_group = group
+    if group =="fullbody":
+        modifier.use_negative_direction = True
+        modifier.use_positive_direction = True
     if shrinkwrap == 'PROJECT': # If it's using project modifier, also refer to the axis parameter to decide what axis to use
         modifier.use_project_x = use_axis[0]
         modifier.use_project_y = use_axis[1]
         modifier.use_project_z = use_axis[2]
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
-def make_custom_group(context,obj, exclude_groups=[0,3,6]):
+def make_custom_group(context,obj, exclude_groups=[0,3,6], name='body'):
     """
     Function that adds a new group which only includes vertices that are not the valves and lower loop
     The group index are 0 for lower basal loop, 3 for mitral valve and 6 for aortic valve
@@ -335,7 +372,7 @@ def make_custom_group(context,obj, exclude_groups=[0,3,6]):
     bpy.context.view_layer.objects.active = obj
 
     bpy.ops.Object.mode_set(mode="OBJECT")
-    group = obj.vertex_groups.new(name='body')
+    group = obj.vertex_groups.new(name=name)
     v_indices = []
     matching_group = True
     for v in obj.data.vertices:
@@ -1176,8 +1213,8 @@ class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal regions of ventricles using the position and angles of the heart valves.'
     def execute(self, context):
-        _, matrices = mesh_create_basal_batch(context)
-        shift_shrinkwrap_topology_batch(context, matrices)
+        _, pos_matrices = mesh_create_basal_batch(context)
+        shift_shrinkwrap_topology_batch(context, pos_matrices)
         return{'FINISHED'} 
 
 def mesh_create_basal_batch(context):
@@ -1500,7 +1537,11 @@ class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
         for name in finished_names:
             obj = bpy.data.objects.get(name)
             obj.select_set(True)
-        #shift_shrinkwrap_topology_batch(context)
+        pos_matrices = (np.array(context.object["mitral_position_matrix"]), np.array(context.object["aortic_position_matrix"]))
+        shift_shrinkwrap_topology_fullbody(context, pos_matrices)
+        for name in finished_names:
+            obj = bpy.data.objects.get(name)
+            obj.select_set(True)
         return {'FINISHED'} 
         
 def select_lower_regions(region):
@@ -1575,6 +1616,7 @@ def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
     triangulate_object(ventricle) # Triangulate any remaining non-triangulated mesh that was between the connections
     bpy.data.objects.remove(basal) # Cleanup: Remove reference object.
+
 def get_valve_state_index(context, counter, frame_EDV):
     """Return the index of the basal region to be used for the given timestep"""
     if context.scene.approach == 3 or context.scene.approach == 4: return 0
@@ -2330,7 +2372,7 @@ def test_function(context):
     scene = context.scene
     view_layer = context.view_layer
     selected_objects = context.selected_objects
-    mesh_create_basal_batch(context)
+    mesh_connect_apical_and_basal_pairs(context)
     return True
 #-----
 
