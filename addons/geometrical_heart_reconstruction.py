@@ -252,7 +252,7 @@ def get_min_max_z(obj, group_id=None):
 
     return (min_z, max_z)
 
-def shift_shrinkwrap_topology_basals(context,matrices=None):
+def shift_shrinkwrap_topology_batch(context,matrices=None):
     """
     Wrapper function to perform shift and shrinkwrap. Matrices are for tracking the absolute movement of the valves
     """
@@ -300,9 +300,43 @@ def shift_shrinkwrap_topology_basals(context,matrices=None):
     for name in selected_names: # All the resulting objects post transformation should still have the same name
         obj = bpy.data.objects.get(name)
         if name=='ventricle_0_basal': 
-            make_custom_group(context,obj, exclude_groups=[0,3,6], name='body')
+            make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
         smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
 
+def shift_shrinkwrap_topology_fullbody(context, matrices=None):
+    """
+    Wrapper function to perform shift and shrinkwrap for the full mesh. Matrices are for tracking the absolute movement of the valves
+    """
+    scene = context.scene
+    view_layer = context.view_layer
+    selected_objects = context.selected_objects
+
+    if not matrices:
+        pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
+        pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
+    else:
+        pos_matrix_mitral = matrices[0]
+        pos_matrix_aortic = matrices[1]
+
+    selected_names = [obj.name for obj in selected_objects]
+    selected_names = sorted(selected_names, key=get_frame_number)
+    
+    temp_name = selected_names[0]
+    for i in range(1,len(selected_names)):
+        source = bpy.data.objects.get(temp_name)
+        source_copy = copy_object(source.name, source.name + '_COPY')
+        target = bpy.data.objects.get(selected_names[i])
+
+        # --- Shift and shrinkwrap the body part --- #
+        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
+        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
+        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group="fullbody") # Shifts and then shrinkwraps 
+        translate_mesh(context, source_copy, shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position
+        
+        temp_name = selected_names[i]
+        bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
+        source_copy.name = temp_name # Rename reference object
+    
 def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body', use_axis=[0,0,0]):
     """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
     scene = context.scene
@@ -313,19 +347,25 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
         translate_mesh(context, source, shift, group=None)
     
     bpy.context.view_layer.objects.active = source
-    make_custom_group(context,source, exclude_groups=[0,3,6], name='body') # 0 lower loop, 3 mitral, 6 aortic. [3,6] to pick everything except valves
+    if group=='body': # Only basal region
+        make_custom_group(context,source, exclude_groups=["lower_basal_edge_loop","MV","AV"], name=group) # Pick everything except valves and lower edge loop
+    else: # Entire body
+        make_custom_group(context,source, exclude_groups=["AV","MV"], name=group) # 0 lower loop, 4 mitral, 7 aortic. [3,6] to pick everything except valves
     # Here we add then apply modifiers to the copied object that makes it shrinkwrap around the target
     modifier = source.modifiers.new(name="shrinkwrap", type='SHRINKWRAP')
     modifier.target = target
     modifier.wrap_method = shrinkwrap
     modifier.vertex_group = group
+    if group =="fullbody": # Extra settings for when morphing entire bodies
+        modifier.use_negative_direction = True
+        modifier.use_positive_direction = True
     if shrinkwrap == 'PROJECT': # If it's using project modifier, also refer to the axis parameter to decide what axis to use
         modifier.use_project_x = use_axis[0]
         modifier.use_project_y = use_axis[1]
         modifier.use_project_z = use_axis[2]
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
-def make_custom_group(context,obj, exclude_groups=[0,3,6], name="custom"):
+def make_custom_group(context,obj, exclude_groups, name='body'):
     """
     Function that adds a new group which only includes vertices that are not the valves and lower loop
     The group index are 0 for lower basal loop, 3 for mitral valve and 6 for aortic valve
@@ -341,7 +381,7 @@ def make_custom_group(context,obj, exclude_groups=[0,3,6], name="custom"):
     for v in obj.data.vertices:
         matching_group = True
         for g in v.groups:
-            if g.group in exclude_groups:
+            if obj.vertex_groups[g.group].name in exclude_groups:
                 matching_group = False
                 break
         if matching_group:
@@ -1176,8 +1216,8 @@ class MESH_OT_create_basal(bpy.types.Operator):
     bl_idname = 'heart.create_basal'
     bl_label = 'Create basal regions of ventricles using the position and angles of the heart valves.'
     def execute(self, context):
-        _, matrices = mesh_create_basal_batch(context)
-        shift_shrinkwrap_topology_basals(context, matrices)
+        _, pos_matrices = mesh_create_basal_batch(context)
+        shift_shrinkwrap_topology_batch(context, pos_matrices)
         return{'FINISHED'} 
 
 def mesh_create_basal_batch(context):
@@ -1500,8 +1540,13 @@ class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
         for name in finished_names:
             obj = bpy.data.objects.get(name)
             obj.select_set(True)
+        pos_matrices = (np.array(context.object["mitral_position_matrix"]), np.array(context.object["aortic_position_matrix"]))
+        shift_shrinkwrap_topology_fullbody(context, pos_matrices)
+        for name in finished_names:
+            obj = bpy.data.objects.get(name)
+            obj.select_set(True)
         return {'FINISHED'} 
-
+        
 def select_lower_regions(region):
     """ Selects the lowest mesh of the basal region"""
     name = region.name
@@ -1522,7 +1567,7 @@ def select_lower_regions(region):
         bpy.ops.object.mode_set(mode='OBJECT')
         # Hide current basal region to improve solution speed as Blender does not need to render all objects at the same time.
         curr_basal.select_set(False)
-        #curr_basal.hide_set(True)   
+        #curr_basal.hide_set(True)
 
 def mesh_connect_apical_and_basal_pairs(context):
     """Connect apical and basal region of the ventricle pairs"""
@@ -1567,7 +1612,7 @@ def triangulate_object(obj):
 # --- This function is where the bulk of the process happens. For every pair of basal and ventricle, this function is called and performs the connection and the smoothing
 def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
-    ## Apply connecting operation for reference and save connecting edges used in the connection.
+    # Apply connecting operation for reference and save connecting edges used in the connection.
     prepare_geometry_for_bridging_pairs(context, ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
     edge_indices_bridge = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
     inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
@@ -2330,8 +2375,8 @@ def test_function(context):
     scene = context.scene
     view_layer = context.view_layer
     selected_objects = context.selected_objects
-    selected_objects = context.selected_objects
-    make_custom_group(context,selected_objects[0], exclude_groups=[4,7], name='full body')
+    #mesh_connect_apical_and_basal_pairs(context)
+    make_custom_group(context,selected_objects[0],exclude_groups=["MV"],name="testnew")
     return True
 #-----
 
