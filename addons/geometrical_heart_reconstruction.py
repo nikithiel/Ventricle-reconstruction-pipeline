@@ -288,9 +288,9 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         ll_z_shift = get_min_max_z(target,0)[1] + get_min_max_z(target,0)[0] - get_min_max_z(source_copy,0)[1] - get_min_max_z(source_copy,0)[0]
         
         lower_loop_shift = [0.5 * ll_x_shift, 0.5* ll_y_shift, 0.5 * ll_z_shift] # Calcs the difference between the lowest points between source and target
-        translate_mesh(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop') # Shifts only the lower edge loop according to above line
-        shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='PROJECT', group='lower_basal_edge_loop', use_axis=[0,0,0]) # Performs shrinkwrap on the lower edge loop
-        shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='NEAREST_SURFACEPOINT', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
+        #translate_mesh(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop') # Shifts only the lower edge loop according to above line
+        #shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='PROJECT', group='lower_basal_edge_loop', use_axis=[0,0,0]) # Performs shrinkwrap on the lower edge loop
+        #shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='NEAREST_SURFACEPOINT', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
         
         temp_name = selected_names[i]
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
@@ -320,6 +320,8 @@ def shift_shrinkwrap_topology_fullbody(context, matrices=None):
 
     selected_names = [obj.name for obj in selected_objects]
     selected_names = sorted(selected_names, key=get_frame_number)
+
+    cons_print
     
     temp_name = selected_names[0]
     for i in range(1,len(selected_names)):
@@ -336,6 +338,12 @@ def shift_shrinkwrap_topology_fullbody(context, matrices=None):
         temp_name = selected_names[i]
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
         source_copy.name = temp_name # Rename reference object
+
+    """for name in selected_names:
+        obj = bpy.data.objects.get(name)
+        if name=='ventricle_0': # Specifically for the first object because it does not have the group yet  
+            make_custom_group(context,obj, exclude_groups=["MV","AV"], name='fullbody')
+        smooth_vertex_group(obj, group="fullbody", factor=0.5, iter=5, use_laplacian=True)"""
     
 def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body', use_axis=[0,0,0]):
     """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
@@ -669,7 +677,7 @@ def remove_multiple_basal_region(context):
     else:
         reference_name = find_reference_ventricle_max(selected_objects)
 
-    context.scene.reference_object_name = reference_name
+    #context.scene.reference_object_name = reference_name
     reference_copy = copy_object(reference_name, 'reference')
     cons_print(f"Chosen reference object: {context.scene.reference_object_name}")
 
@@ -678,12 +686,11 @@ def remove_multiple_basal_region(context):
     deleted_verts = remove_basal_region(context, reference_copy, []) # Remove in reference object
     for obj in selected_objects: remove_basal_region(context, obj, deleted_verts) 
     # Longitudinal shift of each ventricle to match reference object, reducing volume discrepancy between systole and diastole between raw data and reconstructed data.
-    shift_distances = shift_ventricles_longitudinally(context, selected_objects)
+    #shift_distances = shift_ventricles_longitudinally(context, selected_objects)
     context.scene.ref_maxima, context.scene.ref_minima = get_min_max(reference_copy)    
     # Cleanup.
     for obj in selected_objects: obj.select_set(True) # Reselect objects from original selection after main operations are executed.
     bpy.data.objects.remove(bpy.data.objects["reference"], do_unlink=True) # Remove reference object.
-    return shift_distances
 
 def remove_basal_region(context, obj, del_nodes):
     """Remove basal region of the ventricle using a threshold"""
@@ -1256,6 +1263,7 @@ def mesh_create_basal(context, selected_objects):
     #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
     newname = selected_objects[0].name + "basal_region"
     reference_copy = copy_object(selected_objects[0].name, newname)
+    cons_print(newname)
     # Deselect objects.
     for obj in selected_objects: obj.select_set(False)
     # Operations to create basal region of the ventricle.
@@ -1270,7 +1278,7 @@ def mesh_create_basal(context, selected_objects):
         basal.select_set(False)
         basal.hide_set(False)
     # Remove old basal region objects.
-    if context.scene.approach == 5: bpy.data.objects.remove(bpy.data.objects["basal_ref"], do_unlink=True)
+    #if context.scene.approach == 5: bpy.data.objects.remove(bpy.data.objects["basal_ref"], do_unlink=True)
     bpy.data.objects.remove(bpy.data.objects[newname], do_unlink=True)
     bpy.data.objects.remove(bpy.data.objects[newname + "_poisson"], do_unlink=True)
     return basal_regions
@@ -1321,7 +1329,7 @@ def create_basal_region_for_object(context, reference_copy, name):
     # Compute voxel_size for remesh and merge dependent of the smallest valve size. Reduced for approach 5.
     if context.scene.approach == 5: voxel_size = min(context.scene.aortic_radius, context.scene.mitral_radius_long, context.scene.mitral_radius_small) / 6 
     else: voxel_size = min(context.scene.aortic_radius, context.scene.mitral_radius_long, context.scene.mitral_radius_small) / 4 
-    apply_voxel_remesh(voxel_size) # Apply Remesh for better mesh quality (remove small mesh elements with high cell skewness).
+    #apply_voxel_remesh(voxel_size) # Apply Remesh for better mesh quality (remove small mesh elements with high cell skewness).
     # Triangulate remesh.
     bpy.ops.object.modifier_add(type='TRIANGULATE')
     bpy.ops.object.modifier_apply(modifier="Triangulate")
@@ -1594,6 +1602,8 @@ def mesh_connect_apical_and_basal_pairs(context):
 
         # Combine matching apical and basal region
         combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
+        #smoothing_iter_factor = compute_smoothing_iteration_factor_connection(context, counter, volumelist)
+        #smooth_connection_and_basal_region(context, obj, smoothing_iter_factor)
         finished_name.append(name[:-6])
 
     return True, finished_name
@@ -2375,9 +2385,51 @@ def test_function(context):
     scene = context.scene
     view_layer = context.view_layer
     selected_objects = context.selected_objects
-    #mesh_connect_apical_and_basal_pairs(context)
-    make_custom_group(context,selected_objects[0],exclude_groups=["MV"],name="testnew")
+    cobj = selected_objects[0]
+    """_, finished_names = mesh_connect_apical_and_basal_pairs(context)
+    for name in finished_names:
+        obj = bpy.data.objects.get(name)
+        obj.select_set(True)
+        make_custom_group(context,obj,exclude_groups=["MV","AV"],name="test_body")"""
+    make_custom_group(context, cobj, exclude_groups=["lower_basal_edge_loop", 'MV', 'AV'])
+    #cons_print(compareMeshes(selected_objects[0],selected_objects[1]))
     return True
+
+def compareMeshes(mesh1, mesh2):
+    bmesh1 = bmesh.from_edit_mesh(mesh1.data)
+    bmesh2 = bmesh.from_edit_mesh(mesh2.data)
+    if (len(bmesh1.verts) != len(bmesh2.verts)):
+        return f"Inequal amount of vertices. Between {len(bmesh1.verts)} and {len(bmesh2.verts)}"
+    if (len(bmesh1.edges) != len(bmesh2.edges)):
+        return "Inequal amount of edges"
+    if (len(bmesh1.faces) != len(bmesh2.faces)):
+        return "Inequal amount of faces"
+    #for each face, if the same verts make up the face
+    for i in range(0, len(bmesh1.faces)):
+        bmesh1faceVertsList = []
+        bmesh2faceVertsList = []
+        for vert in bmesh1.faces[i].verts:
+            bmesh1faceVertsList.append(vert.index)
+        for vert in bmesh2.faces[i].verts:
+            bmesh2faceVertsList.append(vert.index)
+        bmesh1faceVertsList.sort()
+        bmesh2faceVertsList.sort()
+        if (bmesh1faceVertsList != bmesh2faceVertsList):
+            return "Mismatching vertex on a face"
+    #for each edge, if the same verts make up the edge
+    for i in range(0, len(bmesh1.edges)):
+        bmesh1edgeVertsList = []
+        bmesh2edgeVertsList = []
+        for vert in bmesh1.edges[i].verts:
+            bmesh1faceVertsList.append(vert.index)
+        for vert in bmesh2.edges[i].verts:
+            bmesh2faceVertsList.append(vert.index)
+        bmesh1edgeVertsList.sort()
+        bmesh2edgeVertsList.sort()
+        if (bmesh1edgeVertsList != bmesh2edgeVertsList):
+            return "Mismatching vertex on an edge"
+    #if we make it through all the checks, we have a match!
+    return "It matches!"
 #-----
 
 #PANELS
@@ -2537,13 +2589,6 @@ class PANEL_Setup_Variables(bpy.types.Panel):
         layout.prop(context.scene, "con_fade_percentage", text="Smoothing fade-out share of apical height")
         row = layout.row()
         layout.prop(context.scene, "final_sm_iter", text="Volume preserving smoothing iterations")
-        row = layout.row()
-        layout.prop(context.scene, "con_fade_percentage", text="Smoothing fade-out share of apical height")
-        row = layout.row()
-        layout.prop(context.scene, "final_sm_iter", text="Volume preserving smoothing iterations")
-        row = layout.row()
-        layout.prop(context.scene, "con_fade_percentage", text="Smoothing fade-out share of apical height")
-        row = layout.row()
         row = layout.row()
         row.label(text= "Basal Smoothing Variables")
         layout.prop(context.scene, "basal_sm_factor", text="Basal region smoothing factor")
@@ -3637,7 +3682,7 @@ scene_properties = {
     "time_diastole": bpy.props.FloatProperty(name="Time diastole", default=0.35, min=0.01),
     "frames_ventricle": bpy.props.IntProperty(name="Amount of frames ventricle after interpolation", default=10, min=10),
     # Connection algorithm variables.
-    "reference_object_name": bpy.props.StringProperty(name="Name of the reference object", default="ventricle_0"),
+    #"reference_object_name": bpy.props.StringProperty(name="Name of the reference object", default="ventricle_0"),
     "inset_faces_refinement_steps": bpy.props.IntProperty(name="Refinement steps when insetting faces in the connection algorithm", default=1, min=1),
     "connection_twist": bpy.props.IntProperty(name="Twist for bridging algorithm in connection", default=0),
     "max_con_sm_iter": bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min=5),
