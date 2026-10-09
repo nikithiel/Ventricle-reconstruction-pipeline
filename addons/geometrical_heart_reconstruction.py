@@ -677,7 +677,8 @@ def remove_multiple_basal_region(context):
     else:
         reference_name = find_reference_ventricle_max(selected_objects)
 
-    #context.scene.reference_object_name = reference_name
+    #cons_print(f"Object is read-only: {context.scene.reference_object_name}")
+    context.scene.reference_object_name = reference_name
     reference_copy = copy_object(reference_name, 'reference')
     cons_print(f"Chosen reference object: {context.scene.reference_object_name}")
 
@@ -686,7 +687,7 @@ def remove_multiple_basal_region(context):
     deleted_verts = remove_basal_region(context, reference_copy, []) # Remove in reference object
     for obj in selected_objects: remove_basal_region(context, obj, deleted_verts) 
     # Longitudinal shift of each ventricle to match reference object, reducing volume discrepancy between systole and diastole between raw data and reconstructed data.
-    #shift_distances = shift_ventricles_longitudinally(context, selected_objects)
+    # shift_distances = shift_ventricles_longitudinally(context, selected_objects) # Comment this out to align ventricles in the lowest point instead of the highest
     context.scene.ref_maxima, context.scene.ref_minima = get_min_max(reference_copy)    
     # Cleanup.
     for obj in selected_objects: obj.select_set(True) # Reselect objects from original selection after main operations are executed.
@@ -1263,7 +1264,6 @@ def mesh_create_basal(context, selected_objects):
     #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
     newname = selected_objects[0].name + "basal_region"
     reference_copy = copy_object(selected_objects[0].name, newname)
-    cons_print(newname)
     # Deselect objects.
     for obj in selected_objects: obj.select_set(False)
     # Operations to create basal region of the ventricle.
@@ -1549,7 +1549,7 @@ class MESH_OT_connect_apical_and_basal(bpy.types.Operator):
             obj = bpy.data.objects.get(name)
             obj.select_set(True)
         pos_matrices = (np.array(context.object["mitral_position_matrix"]), np.array(context.object["aortic_position_matrix"]))
-        shift_shrinkwrap_topology_fullbody(context, pos_matrices)
+        #shift_shrinkwrap_topology_fullbody(context, pos_matrices)
         for name in finished_names:
             obj = bpy.data.objects.get(name)
             obj.select_set(True)
@@ -3644,6 +3644,9 @@ dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MES
 
 # Add new properties to the dict. register() and unregister() does not need to be changed. They will automatically register/unregister all properties in the dict.
 scene_properties = {
+    # Reference points.
+    "mitral_ref" : bpy.props.IntProperty(name="Reference point used to track the movement of the mitral valve", default=0),
+    "aorta_ref" : bpy.props.IntProperty(name="Reference point used to track the movement of the aortic valve", default=0),
     # Position variables.
     "pos_top": bpy.props.FloatVectorProperty(name="Top position", default=(0, 0, 1)),
     "pos_bot": bpy.props.FloatVectorProperty(name="Bottom position", default=(0, 0, 0)),
@@ -3682,7 +3685,7 @@ scene_properties = {
     "time_diastole": bpy.props.FloatProperty(name="Time diastole", default=0.35, min=0.01),
     "frames_ventricle": bpy.props.IntProperty(name="Amount of frames ventricle after interpolation", default=10, min=10),
     # Connection algorithm variables.
-    #"reference_object_name": bpy.props.StringProperty(name="Name of the reference object", default="ventricle_0"),
+    "reference_object_name": bpy.props.StringProperty(name="Name of the reference object", default="ventricle_0"),
     "inset_faces_refinement_steps": bpy.props.IntProperty(name="Refinement steps when insetting faces in the connection algorithm", default=1, min=1),
     "connection_twist": bpy.props.IntProperty(name="Twist for bridging algorithm in connection", default=0),
     "max_con_sm_iter": bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min=5),
@@ -3701,71 +3704,6 @@ scene_properties = {
 }
 
 def register():
-    # Reference points.
-    bpy.types.Scene.mitral_ref = bpy.props.IntProperty(name="Reference point used to track the movement of the mitral valve")
-    bpy.types.Scene.aorta_ref = bpy.props.IntProperty(name="Reference point used to track the movement of the aortic valve")
-    # Position variables.
-    bpy.types.Scene.pos_top = bpy.props.FloatVectorProperty(name="Top position", default = (0,0,1))
-    bpy.types.Scene.pos_bot = bpy.props.FloatVectorProperty(name="Top position", default = (0,0,0))
-    bpy.types.Scene.pos_septum = bpy.props.FloatVectorProperty(name="Top position", default = (0,1,0))
-
-    # Mitral valve.
-    bpy.types.Scene.mitral_radius_long = bpy.props.FloatProperty(name="mitral_radius_long", default=6,  min = 0.01)
-    bpy.types.Scene.mitral_radius_small = bpy.props.FloatProperty(name="mitral_radius_small", default=3,  min = 0.01)
-    bpy.types.Scene.translation_mitral = bpy.props.FloatVectorProperty(name="Aortic valve translation", default = (0,0,1))
-    bpy.types.Scene.angle_mitral = bpy.props.FloatVectorProperty(name="Aortic valve rotation", default = (0,0,0))
-    # Aortic valve.
-    bpy.types.Scene.aortic_radius = bpy.props.FloatProperty(name="aortic_radius", default=2,  min = 0.01)
-    bpy.types.Scene.translation_aortic = bpy.props.FloatVectorProperty(name="Aortic valve translation", default = (0,0,1))
-    bpy.types.Scene.angle_aortic = bpy.props.FloatVectorProperty(name="Aortic valve rotation", default = (0,0,0))
-    # Support structure.
-    bpy.types.Scene.ref_minima = bpy.props.FloatVectorProperty(name="Minima of reference object", default = (0,0,0))
-    bpy.types.Scene.ref_maxima = bpy.props.FloatVectorProperty(name="Maxima of reference object", default = (0,0,1))
-    # Cutting plane variables.
-    bpy.types.Scene.remove_basal_threshold = bpy.props.FloatProperty(name="Threshold for the removal of the basal region", default=28.5,  min = 0)
-    bpy.types.Scene.height_plane = bpy.props.FloatProperty(name="Cut-off value for the creation of the reference basal region", default=40,  min = 0.01)
-    bpy.types.Scene.min_valves = bpy.props.FloatProperty(name="Minimal z-value of valves", default=45)
-    # Approach selection.
-    bpy.types.Scene.approach = bpy.props.IntProperty(name="Chosen modeling approach", default=3, min = 3, max = 5)
-    bpy.types.Scene.mean_reference = bpy.props.BoolProperty(name="Mean volume as reference", default=True)
-    # Possion algorithm.
-    bpy.types.Scene.poisson_depth = bpy.props.IntProperty(name="Depth of possion algorithm", default=10,  min = 1)
-    # Interpolation variables.
-    bpy.types.Scene.time_rr = bpy.props.FloatProperty(name="Time RR-duration", default=0.6,  min = 0.01)
-    bpy.types.Scene.time_diastole = bpy.props.FloatProperty(name="Time diastole", default=0.35,  min = 0.01) 
-    bpy.types.Scene.frames_ventricle = bpy.props.IntProperty(name="Amount of frames ventricle after interpolation", default=10,  min = 10)
-    # Connection algorithm variables.
-    bpy.types.Scene.reference_object_name = bpy.props.StringProperty(name="Name of the reference object", default = "ventricle_0")
-    bpy.types.Scene.inset_faces_refinement_steps = bpy.props.IntProperty(name="Refinement steps when insetting faces in the connection algorithm", default=1, min=1)
-    bpy.types.Scene.connection_twist = bpy.props.IntProperty(name="Twist for bridging algorithm in connection", default=0)
-    bpy.types.Scene.max_con_sm_iter = bpy.props.IntProperty(name="Maximum smoothing iterations for the smoothing of the connection between basal and apical region", default=25, min = 5)
-    bpy.types.Scene.min_con_sm_iter = bpy.props.IntProperty(name="Minimum smoothing iterations for the smoothing of the connection between basal and apical region", default=2, min = 0)
-    bpy.types.Scene.sm_reps = bpy.props.IntProperty(name="Repetitions of reselection and smoothing application when smoothing basal and apical region", default=3, min = 0)
-    bpy.types.Scene.basal_sm_factor = bpy.props.FloatProperty(name="Basal Region Smoothing Factor", default=0.5)
-    bpy.types.Scene.basal_sm_iter = bpy.props.IntProperty(name="Basal Region Smoothing Iterations", default=5)
-    # Import variables.
-    bpy.types.Scene.ventricle_import_dir = bpy.props.StringProperty(
-        name="Import folder",
-        description="Folder to import the ventricle STL dataset",
-        subtype='DIR_PATH',
-        default="//",
-    )
-
-    # Export / CFD pipeline variables.
-    bpy.types.Scene.ventricle_export_dir = bpy.props.StringProperty(
-        name="Export folder",
-        description="Folder to export for ventricle connectivity/coordinates and STL export",
-        subtype='DIR_PATH',
-        default="//",
-    )
-    
-    bpy.types.Scene.plot_input_path = bpy.props.StringProperty(
-        name = "Input directory for plotting",
-        description="Directory for plotting input",
-        subtype="DIR_PATH",
-        default="//",
-    )
-    
     # Register UI-classes for Panels and functions.
     for name, prop in scene_properties.items():
         try:
