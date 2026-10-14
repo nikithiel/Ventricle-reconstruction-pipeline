@@ -677,7 +677,11 @@ def remove_multiple_basal_region(context):
     else:
         reference_name = find_reference_ventricle_max(selected_objects)
 
-    #cons_print(f"Object is read-only: {context.scene.reference_object_name}")
+    """cons_print(f"Object is read-only: {context.scene.reference_object_name}")
+    cons_print(f"Object trying to be asigned: {reference_name}")"""
+    """print("Scene type:", type(context.scene))
+    print("Property exists:", hasattr(context.scene, "reference_object_name"))
+    print("Property value:", getattr(context.scene, "reference_object_name", "<missing>"))"""
     context.scene.reference_object_name = reference_name
     reference_copy = copy_object(reference_name, 'reference')
     cons_print(f"Chosen reference object: {context.scene.reference_object_name}")
@@ -768,13 +772,13 @@ def subdivide_last_edge_loop(obj, vg_orifice):
     bpy.ops.object.vertex_group_set_active(group=vg_orifice.name)
     bpy.ops.object.vertex_group_select()
     # Iteratively subdivide edge loop with surrounding mesh creating a less skewed transition between subdivides and unsibdivided elements.
-    bpy.ops.mesh.select_more()
+    """bpy.ops.mesh.select_more()
     bpy.ops.mesh.subdivide(number_cuts=1, ngon=False)
     bpy.ops.mesh.select_less()
-    bpy.ops.mesh.select_less()
+    bpy.ops.mesh.select_less()"""
     bpy.ops.object.mode_set(mode='OBJECT')
     # subdivide(ngon=False) yields quads as soon as the apical mesh carries one. Runs once per frame, so FIXED.
-    triangulate_mesh_object(obj, quad_method='FIXED', source="subdivide_last_edge_loop")
+    # triangulate_mesh_object(obj, quad_method='FIXED', source="subdivide_last_edge_loop")
     # Re-initialize vertex group for upper apical edge loop.
     bpy.ops.object.mode_set(mode='OBJECT')
     bm = transfer_data_to_mesh(obj)
@@ -1256,12 +1260,11 @@ def mesh_create_basal_batch(context):
 
 def mesh_create_basal(context, selected_objects):
     """Create Basal Regions for each of the selected objects"""
-    if len(selected_objects) == 1:
+    """if len(selected_objects) == 1:
         bpy.types.Scene.reference_object_name = selected_objects[0].name
     else:
         cons_print(f"Currently does not work :(")
-        return False
-    #reference_copy = copy_object(bpy.types.Scene.reference_object_name, 'basal_region')
+        return False"""
     newname = selected_objects[0].name + "basal_region"
     reference_copy = copy_object(selected_objects[0].name, newname)
     # Deselect objects.
@@ -1626,8 +1629,8 @@ def combine_apical_and_basal_region_pairs(context, basal, ventricle):
     prepare_geometry_for_bridging_pairs(context, ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
     edge_indices_bridge = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
     inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
-    edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
-    triangulate_object(ventricle) # Triangulate any remaining non-triangulated mesh that was between the connections
+    #edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
+    #triangulate_object(ventricle) # Triangulate any remaining non-triangulated mesh that was between the connections
     bpy.data.objects.remove(basal) # Cleanup: Remove reference object.
 
 def get_valve_state_index(context, counter, frame_EDV):
@@ -2386,18 +2389,15 @@ def test_function(context):
     view_layer = context.view_layer
     selected_objects = context.selected_objects
     cobj = selected_objects[0]
-    """_, finished_names = mesh_connect_apical_and_basal_pairs(context)
-    for name in finished_names:
-        obj = bpy.data.objects.get(name)
-        obj.select_set(True)
-        make_custom_group(context,obj,exclude_groups=["MV","AV"],name="test_body")"""
-    make_custom_group(context, cobj, exclude_groups=["lower_basal_edge_loop", 'MV', 'AV'])
-    #cons_print(compareMeshes(selected_objects[0],selected_objects[1]))
+    cobj2 = selected_objects[1]
+    cons_print(compareMeshes(cobj,cobj2))
     return True
 
-def compareMeshes(mesh1, mesh2):
+def compareMeshes(mesh1, mesh2, group=None):
     bmesh1 = bmesh.from_edit_mesh(mesh1.data)
     bmesh2 = bmesh.from_edit_mesh(mesh2.data)
+    
+    # Starts Comparison here
     if (len(bmesh1.verts) != len(bmesh2.verts)):
         return f"Inequal amount of vertices. Between {len(bmesh1.verts)} and {len(bmesh2.verts)}"
     if (len(bmesh1.edges) != len(bmesh2.edges)):
@@ -2430,6 +2430,8 @@ def compareMeshes(mesh1, mesh2):
             return "Mismatching vertex on an edge"
     #if we make it through all the checks, we have a match!
     return "It matches!"
+
+
 #-----
 
 #PANELS
@@ -3693,6 +3695,9 @@ scene_properties = {
     "sm_reps": bpy.props.IntProperty(name="Repetitions of reselection and smoothing application when smoothing basal and apical region", default=3, min=0),    
     "con_fade_percentage": bpy.props.FloatProperty(name="Share of the apical height over which the smoothing of the connection fades out below the cut", default=20.0, min=0.1, max=100.0, subtype='PERCENTAGE'),
     "final_sm_iter": bpy.props.IntProperty(name="Volume preserving smoothing iterations applied to the whole ventricle except the valves", default=10, min=0),
+    # Smoothing iter
+    "basal_sm_factor" : bpy.props.FloatProperty(name="Basal Region Smoothing Factor", default=0.5),
+    "basal_sm_iter" : bpy.props.IntProperty(name="Basal Region Smoothing Iterations", default=5),
     # Import variables.
     "ventricle_import_dir": bpy.props.StringProperty(name="Import folder", description="Folder to import the ventricle STL dataset", subtype='DIR_PATH', default="//"),
     # Export / CFD pipeline variables.
@@ -3708,12 +3713,14 @@ def register():
     for name, prop in scene_properties.items():
         try:
             setattr(bpy.types.Scene, name, prop)
-        except:
-            print("most likely already registered")
+        except Exception as e:
+            print(f"Failed to register {name}: {type(e).__name__}: {e}")
     for c in classes: bpy.utils.register_class(c)
     # Register Development UI-classes.
     if dev_env_tools: 
         for c in dev_classes: bpy.utils.register_class(c)
+    
+    print(bpy.types.Scene.bl_rna.properties.get("reference_object_name"))
 
 
 def unregister(): # Unregister classes.
