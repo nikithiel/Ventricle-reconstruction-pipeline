@@ -1606,6 +1606,8 @@ def mesh_connect_apical_and_basal_pairs(context):
     select_lower_regions(basal_ref)
     # Combine the copy and triangulate while also getting the references
     new_edges_vert_indices = combine_apical_and_basal_region_pairs(context, basal_ref, apical_ref) # Connection between apical and basal edge loop reference
+
+    # Past this point, the basal_ref object is already joined into apical_ref. So every operation done will be on apical_ref
     inset_faces_smooth(context)
     new_triangulate_edge_indices = triangulate_connection(True, apical_ref) # Triangulation reference
 
@@ -1641,6 +1643,7 @@ def mesh_connect_apical_and_basal_pairs(context):
         bpy.ops.mesh.edge_face_add()
         bpy.ops.object.mode_set(mode='OBJECT')
 
+        # Perform partial smoothing from above
         smoothing_iter_factor = compute_smoothing_iteration_factor_connection(context, int(name[-7:-6]), volumelist)
         smooth_connection_and_basal_region(context, apical_obj, smoothing_iter_factor)
         finished_name.append(name[:-6])
@@ -1664,9 +1667,6 @@ def combine_apical_and_basal_region_pairs(context, basal, ventricle, vert_idx = 
         # Apply connecting operation for reference and save connecting edges used in the connection.
         prepare_geometry_for_bridging_pairs(context, ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
         new_edges_vert_indices = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
-        #inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
-        #edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
-        #triangulate_object(ventricle) # Triangulate any remaining non-triangulated mesh that was between the connections
         bpy.data.objects.remove(basal) # Cleanup: Remove reference object.
         return new_edges_vert_indices
     else:
@@ -1767,7 +1767,6 @@ def triangulate_connection(bool_ref, obj, ref_edge_indices=[]):
     if bool_ref: # Initial triangulation as a reference.
         bpy.ops.object.mode_set(mode='EDIT') 
         selected_edges_before_indices, selected_edges_before_verts = get_selected_edges(obj) # Collect edge indices before operation.
-        #bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY') # Triangulate connection.
 
         # Triangulate using a modifier for better control
         bpy.ops.object.mode_set(mode='OBJECT') 
