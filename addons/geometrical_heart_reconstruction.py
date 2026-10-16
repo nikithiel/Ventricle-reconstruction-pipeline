@@ -1595,7 +1595,15 @@ def mesh_connect_apical_and_basal_pairs(context):
     basal_region_names = [obj.name for obj in selected_objects]
     apical_region_names = [obj.name[:-6] for obj in selected_objects] # Get a list of the matching apical regions for each item
 
-    for name in basal_region_names:
+    # Attempt to connect the basal and apical pairs
+    # Perform once on the first object just to get the connection vertex indices
+    obj = bpy.data.objects.get(basal_region_names[0])
+    obj.select_set(False)
+    select_lower_regions(obj)
+    new_edges_vert_indices = combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
+    cons_print(new_edges_vert_indices)
+
+    for name in basal_region_names[1:]:
         for obj in context.selected_objects:
             obj.select_set(False)
         cons_print(f"Connecting {name}")
@@ -1604,7 +1612,7 @@ def mesh_connect_apical_and_basal_pairs(context):
         select_lower_regions(obj)
 
         # Combine matching apical and basal region
-        combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
+        combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]), new_edges_vert_indices)
         #smoothing_iter_factor = compute_smoothing_iteration_factor_connection(context, counter, volumelist)
         #smooth_connection_and_basal_region(context, obj, smoothing_iter_factor)
         finished_name.append(name[:-6])
@@ -1623,15 +1631,26 @@ def triangulate_object(obj):
     bm.free()
 
 # --- This function is where the bulk of the process happens. For every pair of basal and ventricle, this function is called and performs the connection and the smoothing
-def combine_apical_and_basal_region_pairs(context, basal, ventricle):
+def combine_apical_and_basal_region_pairs(context, basal, ventricle, vert_idx = None):
     """Combine the two regions by copying and joining the basal region for each ventricle and connecting the orifice edge loops between these newly joined objects"""
-    # Apply connecting operation for reference and save connecting edges used in the connection.
-    prepare_geometry_for_bridging_pairs(context, ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
-    edge_indices_bridge = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
-    inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
-    #edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
-    #triangulate_object(ventricle) # Triangulate any remaining non-triangulated mesh that was between the connections
-    bpy.data.objects.remove(basal) # Cleanup: Remove reference object.
+    if vert_idx is None: # Operation is done without reference, meaning first object most likely
+        # Apply connecting operation for reference and save connecting edges used in the connection.
+        prepare_geometry_for_bridging_pairs(context, ventricle, basal) # Prepare geometry for bridging by removing the original basal region and replacing it with the reconstructed basal region.
+        new_edges_vert_indices = bridge_edges_reference_pairs(context, ventricle) # Create initial connection between the upper apical and lower basal edge loop.
+        #inset_faces_smooth(context) # Refine connection by separating long connection faces into more uniformly sized faces.
+        #edge_indices_triangulate = triangulate_connection(True, ventricle, ref_edge_indices=[]) # Triangulate connection faces saving newly created edges.
+        #triangulate_object(ventricle) # Triangulate any remaining non-triangulated mesh that was between the connections
+        bpy.data.objects.remove(basal) # Cleanup: Remove reference object.
+        return new_edges_vert_indices
+    else:
+        prepare_geometry_for_bridging_pairs(context, ventricle, basal) # Here it's also joined
+        bridge_edges_ventricle(ventricle, vert_idx)
+        bpy.data.objects.remove(basal)
+        return None
+
+def manual_pair_bridging(context, basal, ventricle, index_pairs):
+    """Attempts to connect the lower basal and upper apical loops while still preserving node connectivity"""
+    return None
 
 def get_valve_state_index(context, counter, frame_EDV):
     """Return the index of the basal region to be used for the given timestep"""
@@ -2389,8 +2408,18 @@ def test_function(context):
     view_layer = context.view_layer
     selected_objects = context.selected_objects
     cobj = selected_objects[0]
-    cobj2 = selected_objects[1]
-    cons_print(compareMeshes(cobj,cobj2))
+    #cobj2 = selected_objects[1]
+    #cons_print(compareMeshes(cobj,cobj2))
+    #obj = bpy.context.edit_object
+    me = cobj.data
+    bm = bmesh.from_edit_mesh(me)
+
+    #selected_faces = [f for f in bm.faces if f.select]
+    for f in bm.faces:
+        if f.select:
+            cur_face = f
+    faces_vertices = [v for v in cur_face.verts]
+    print(faces_vertices)
     return True
 
 def compareMeshes(mesh1, mesh2, group=None):
@@ -3719,8 +3748,6 @@ def register():
     # Register Development UI-classes.
     if dev_env_tools: 
         for c in dev_classes: bpy.utils.register_class(c)
-    
-    print(bpy.types.Scene.bl_rna.properties.get("reference_object_name"))
 
 
 def unregister(): # Unregister classes.
