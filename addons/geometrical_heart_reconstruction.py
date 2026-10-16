@@ -1596,13 +1596,21 @@ def mesh_connect_apical_and_basal_pairs(context):
     apical_region_names = [obj.name[:-6] for obj in selected_objects] # Get a list of the matching apical regions for each item
 
     # Attempt to connect the basal and apical pairs
-    # Perform once on the first object just to get the connection vertex indices
+    # Perform once on a copy of the first object just to get the connection vertex indices
+    
+    # Prepare a copy for reference
     basal_0_name = basal_region_names[0]
-    basal_0_temp = copy_object(basal_0_name, basal_0_name + "_temp")
-    apical_0_temp = copy_object(basal_0_name[:-6], basal_0_name[:-6] + "_temp")
-    basal_0_temp.select_set(False)
-    select_lower_regions(basal_0_temp)
-    new_edges_vert_indices = combine_apical_and_basal_region_pairs(context, basal_0_temp, apical_0_temp)
+    basal_ref = copy_object(basal_0_name, basal_0_name + "_temp")
+    apical_ref = copy_object(basal_0_name[:-6], basal_0_name[:-6] + "_temp")
+    basal_ref.select_set(False)
+    select_lower_regions(basal_ref)
+    # Combine the copy and triangulate while also getting the references
+    new_edges_vert_indices = combine_apical_and_basal_region_pairs(context, basal_ref, apical_ref) # Connection between apical and basal edge loop reference
+    inset_faces_smooth(context)
+    new_triangulate_edge_indices = triangulate_connection(True, apical_ref) # Triangulation reference
+
+    bpy.data.objects.remove(apical_ref) # Remove reference
+    volumelist = compute_volumes(selected_objects, False) # Prepare volumes for smoothing
 
     # Bridge every pair of basal and apical objects using the 
     for name in basal_region_names:
@@ -1610,16 +1618,32 @@ def mesh_connect_apical_and_basal_pairs(context):
             obj.select_set(False)
         cons_print(f"Connecting {name}")
         obj = bpy.data.objects.get(name)
+        apical_obj = bpy.data.objects.get(name[:-6])
         # Select only lower basal edge loop vertex group.
         select_lower_regions(obj)
 
         # Combine matching apical and basal region
-        combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]), new_edges_vert_indices)
-        #smoothing_iter_factor = compute_smoothing_iteration_factor_connection(context, counter, volumelist)
-        #smooth_connection_and_basal_region(context, obj, smoothing_iter_factor)
-        finished_name.append(name[:-6])
+        combine_apical_and_basal_region_pairs(context, obj, apical_obj, new_edges_vert_indices)
+        inset_faces_smooth(context)
 
-    bpy.data.objects.remove(apical_0_temp)
+        # Remove faces before triangulation.
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_more()
+        bpy.ops.mesh.delete(type='ONLY_FACE') 
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        #cons_print(new_triangulate_edge_indices)
+        triangulate_connection(False, apical_obj, new_triangulate_edge_indices)
+
+        # Add faces onto triangulation.
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.edge_face_add()
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        smoothing_iter_factor = compute_smoothing_iteration_factor_connection(context, int(name[-7:-6]), volumelist)
+        smooth_connection_and_basal_region(context, apical_obj, smoothing_iter_factor)
+        finished_name.append(name[:-6])
     return True, finished_name
 
 def triangulate_object(obj):
@@ -1733,17 +1757,26 @@ def inset_faces_smooth(context):
     bpy.ops.object.mode_set(mode='EDIT')
     for counter, value in enumerate(range(context.scene.inset_faces_refinement_steps)):
         inset_thickness = distance / (4 * 2**(counter)) # Reduce the offset between newly added edge_loops by the factor 4.
-        bpy.ops.mesh.inset(thickness= inset_thickness, use_even_offset=False, depth=0, use_select_inset=True) # Insert faces along the bridge between apical and basal.
+        bpy.ops.mesh.inset(thickness= inset_thickness, use_even_offset=False, depth=0, use_select_inset=True, use_edge_rail = True) # Insert faces along the bridge between apical and basal.
         bpy.ops.mesh.vertices_smooth(factor=0.5, repeat= 1 + counter)  # Smooth connection between apical and basal region including the newly added faces.
     bpy.ops.object.mode_set(mode='EDIT')
   
-def triangulate_connection(bool_ref, obj, ref_edge_indices):
+def triangulate_connection(bool_ref, obj, ref_edge_indices=[]):
     """Triangulate connection between apical and basal region"""
     edges_vert_indices_tri = []
     if bool_ref: # Initial triangulation as a reference.
         bpy.ops.object.mode_set(mode='EDIT') 
         selected_edges_before_indices, selected_edges_before_verts = get_selected_edges(obj) # Collect edge indices before operation.
-        bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY') # Triangulate connection.
+        #bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY') # Triangulate connection.
+
+        # Triangulate using a modifier for better control
+        bpy.ops.object.mode_set(mode='OBJECT') 
+        modifier = obj.modifiers.new(name="triangulate_ref", type='TRIANGULATE')
+        modifier.ngon_method = "BEAUTY"
+        modifier.quad_method = "BEAUTY"
+        bpy.ops.object.modifier_apply(modifier='triangulate_ref')
+        bpy.ops.object.mode_set(mode='EDIT') 
+
         selected_edges_after_indices, selected_edges_after_verts = get_selected_edges(obj) # Collect edge indices after operation.
         # Compare edges before and after operation and only keep the new edges and save their corresponding vertex indices in a list.
         for counter, e in enumerate(selected_edges_after_indices):
@@ -1757,7 +1790,10 @@ def triangulate_connection(bool_ref, obj, ref_edge_indices):
         bm.verts.ensure_lookup_table()
         # Create connecting edge between a and b
         for a, b in ref_edge_indices:
-            bm.edges.new((bm.verts[a], bm.verts[b]))
+            try:
+                bm.edges.new((bm.verts[a], bm.verts[b]))
+            except Exception as e:
+                print(f"Duplicate edges are between {a} and {b}")
             bm.verts[a].select = True
             bm.verts[b].select = True
         # Create faces between connecting edges
