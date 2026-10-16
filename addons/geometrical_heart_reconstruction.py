@@ -1586,7 +1586,7 @@ def mesh_connect_apical_and_basal_pairs(context):
     selected_objects = context.selected_objects
     finished_name = []
 
-    # Checks if every basal region has a pair (file with the same name except no _basal at the end)
+    # Checks if every basal region has a pair (object with the same name except no _basal at the end)
     for obj in selected_objects:
         if bpy.data.objects.get(obj.name[:-6]) is None :
             cons_print(f"No matching ventricle found")
@@ -1597,13 +1597,15 @@ def mesh_connect_apical_and_basal_pairs(context):
 
     # Attempt to connect the basal and apical pairs
     # Perform once on the first object just to get the connection vertex indices
-    obj = bpy.data.objects.get(basal_region_names[0])
-    obj.select_set(False)
-    select_lower_regions(obj)
-    new_edges_vert_indices = combine_apical_and_basal_region_pairs(context, obj, bpy.data.objects.get(obj.name[:-6]))
-    cons_print(new_edges_vert_indices)
+    basal_0_name = basal_region_names[0]
+    basal_0_temp = copy_object(basal_0_name, basal_0_name + "_temp")
+    apical_0_temp = copy_object(basal_0_name[:-6], basal_0_name[:-6] + "_temp")
+    basal_0_temp.select_set(False)
+    select_lower_regions(basal_0_temp)
+    new_edges_vert_indices = combine_apical_and_basal_region_pairs(context, basal_0_temp, apical_0_temp)
 
-    for name in basal_region_names[1:]:
+    # Bridge every pair of basal and apical objects using the 
+    for name in basal_region_names:
         for obj in context.selected_objects:
             obj.select_set(False)
         cons_print(f"Connecting {name}")
@@ -1617,6 +1619,7 @@ def mesh_connect_apical_and_basal_pairs(context):
         #smooth_connection_and_basal_region(context, obj, smoothing_iter_factor)
         finished_name.append(name[:-6])
 
+    bpy.data.objects.remove(apical_0_temp)
     return True, finished_name
 
 def triangulate_object(obj):
