@@ -1611,7 +1611,7 @@ def mesh_connect_apical_and_basal_pairs(context):
     inset_faces_smooth(context)
     new_triangulate_edge_indices = triangulate_connection(True, apical_ref) # Triangulation reference
 
-    bpy.data.objects.remove(apical_ref) # Remove reference
+    #bpy.data.objects.remove(apical_ref) # Remove reference
     volumelist = compute_volumes(selected_objects, False) # Prepare volumes for smoothing
 
     # Bridge every pair of basal and apical objects using the 
@@ -1792,7 +1792,7 @@ def triangulate_connection(bool_ref, obj, ref_edge_indices=[]):
             try:
                 bm.edges.new((bm.verts[a], bm.verts[b]))
             except Exception as e:
-                print(f"Duplicate edges are between {a} and {b}")
+                pass
             bm.verts[a].select = True
             bm.verts[b].select = True
         # Create faces between connecting edges
@@ -1924,6 +1924,36 @@ def smooth_connection_and_basal_region(context, obj, smoothing_iter_factor):
     bm.select_flush(True)
     bm.to_mesh(obj.data)
     bm.free()
+
+def subdivide_vertex_group(context, obj, groups=[], cuts=1):
+    bpy.context.view_layer.objects.active = obj # Set object as active
+    if obj.mode != "EDIT": # If not edit mode, go edit mode
+        bpy.ops.object.mode_set(mode="EDIT")
+    
+    bm = bmesh.from_edit_mesh(obj.data)
+    
+    
+    if groups == []: # If no group, selects all the edge 
+        #bpy.ops.mesh.select_all(action="DESELECT")
+        selected_edges = [edge for edge in bm.edges]
+    else: # Else selects all edges that is adjacent to a selected vertex
+        for group in groups: 
+            bpy.ops.object.vertex_group_set_active(group=group)
+            
+        selected_edges = [edge for edge in bm.edges if any(v.select for v in edge.verts)]
+
+    # Perform subdivision on the selected edges
+    bmesh.ops.subdivide_edges(
+            bm,
+            edges = selected_edges
+            cuts=cuts,
+            use_grid_fill=True
+        )
+
+    #bmesh.update_edit_mesh(obj.data)
+    obj.data.update()
+    bpy.ops.Object.mode_set(mode="OBJECT")
+    return True
 
 class MESH_OT_Ventricle_Sort(bpy.types.Operator): 
     """Sort ventricles by volume starting with ESV"""
@@ -2449,15 +2479,7 @@ def test_function(context):
     #cobj2 = selected_objects[1]
     #cons_print(compareMeshes(cobj,cobj2))
     #obj = bpy.context.edit_object
-    me = cobj.data
-    bm = bmesh.from_edit_mesh(me)
-
-    #selected_faces = [f for f in bm.faces if f.select]
-    for f in bm.faces:
-        if f.select:
-            cur_face = f
-    faces_vertices = [v for v in cur_face.verts]
-    print(faces_vertices)
+    subdivide_vertex_group(context, cobj, groups=["lower_basal_edge_loop", "AV_Boundary", "MV_Boundary"], cuts=1)
     return True
 
 def compareMeshes(mesh1, mesh2, group=None):
