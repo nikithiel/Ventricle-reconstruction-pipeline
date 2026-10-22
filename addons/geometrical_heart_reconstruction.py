@@ -1048,6 +1048,7 @@ def create_valve_orifice(context, valve_mode):
     # smooth_relax_edgeloop(), which deletes vertices with two neighbours and would otherwise see a different valence.
     triangulate_mesh_object(obj, quad_method='BEAUTY', source="create_valve_orifice")
     return True
+
 def select_valve_vertices(context, valve_mode):
     """Select all vertices of a given valve"""
     if 'Valve_area' in [obj.name for obj in bpy.data.objects]: bpy.data.objects.remove(bpy.data.objects['Valve_area'], do_unlink=True) # Remove valve area object, if an object with the same name already exists.
@@ -1229,6 +1230,11 @@ class MESH_OT_create_basal(bpy.types.Operator):
     bl_label = 'Create basal regions of ventricles using the position and angles of the heart valves.'
     def execute(self, context):
         _, pos_matrices = mesh_create_basal_batch(context)
+        
+        # Subdivide the first object before morphing
+        obj = context.selected_objects[0]
+        make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
+        subdivide_vertex_group(context, obj, groups=["body", "AV_Boundary", "MV_Boundary"], cuts=1)
         shift_shrinkwrap_topology_batch(context, pos_matrices)
         return{'FINISHED'} 
 
@@ -1945,7 +1951,7 @@ def subdivide_vertex_group(context, obj, groups=[], cuts=1):
     # Perform subdivision on the selected edges
     bmesh.ops.subdivide_edges(
             bm,
-            edges = selected_edges
+            edges = selected_edges,
             cuts=cuts,
             use_grid_fill=True
         )
@@ -2479,7 +2485,7 @@ def test_function(context):
     #cobj2 = selected_objects[1]
     #cons_print(compareMeshes(cobj,cobj2))
     #obj = bpy.context.edit_object
-    subdivide_vertex_group(context, cobj, groups=["lower_basal_edge_loop", "AV_Boundary", "MV_Boundary"], cuts=1)
+    subdivide_vertex_group(context, cobj, groups=["body", "AV_Boundary", "MV_Boundary"], cuts=1)
     return True
 
 def compareMeshes(mesh1, mesh2, group=None):
