@@ -1235,6 +1235,7 @@ class MESH_OT_create_basal(bpy.types.Operator):
         obj = context.selected_objects[0]
         make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
         subdivide_vertex_group(context, obj, groups=["body", "AV_Boundary", "MV_Boundary"], cuts=1)
+        # Here the issue is that the vertex group for lower edge increases after subdivision
         shift_shrinkwrap_topology_batch(context, pos_matrices)
         return{'FINISHED'} 
 
@@ -1946,7 +1947,7 @@ def subdivide_vertex_group(context, obj, groups=[], cuts=1):
         for group in groups: 
             bpy.ops.object.vertex_group_set_active(group=group)
             
-        selected_edges = [edge for edge in bm.edges if any(v.select for v in edge.verts)]
+        selected_edges = [edge for edge in bm.edges if all(v.select for v in edge.verts)]
 
     # Perform subdivision on the selected edges
     bmesh.ops.subdivide_edges(
