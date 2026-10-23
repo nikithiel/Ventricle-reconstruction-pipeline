@@ -1619,7 +1619,7 @@ def mesh_connect_apical_and_basal_pairs(context):
     inset_faces_smooth(context)
     new_triangulate_edge_indices = triangulate_connection(True, apical_ref) # Triangulation reference
 
-    #bpy.data.objects.remove(apical_ref) # Remove reference
+    bpy.data.objects.remove(apical_ref) # Remove reference
     volumelist = compute_volumes(selected_objects, False) # Prepare volumes for smoothing
 
     # Bridge every pair of basal and apical objects using the 
