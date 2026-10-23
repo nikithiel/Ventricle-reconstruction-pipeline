@@ -1234,7 +1234,8 @@ class MESH_OT_create_basal(bpy.types.Operator):
         # Subdivide the first object before morphing
         obj = context.selected_objects[0]
         make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
-        subdivide_vertex_group(context, obj, groups=["body", "AV_Boundary", "MV_Boundary"], cuts=1)
+        # WIP Current issue is that the areas around the valves are also not triangulated, automating difficult
+        #subdivide_vertex_group(context, obj, groups=["body", "AV_Boundary", "MV_Boundary"], cuts=1)
         # Here the issue is that the vertex group for lower edge increases after subdivision
         shift_shrinkwrap_topology_batch(context, pos_matrices)
         return{'FINISHED'} 
@@ -1936,7 +1937,9 @@ def subdivide_vertex_group(context, obj, groups=[], cuts=1):
     bpy.context.view_layer.objects.active = obj # Set object as active
     if obj.mode != "EDIT": # If not edit mode, go edit mode
         bpy.ops.object.mode_set(mode="EDIT")
-    
+
+    #WIP
+    #bpy.ops.mesh.select_more()
     bm = bmesh.from_edit_mesh(obj.data)
     
     
@@ -1952,6 +1955,7 @@ def subdivide_vertex_group(context, obj, groups=[], cuts=1):
     # Perform subdivision on the selected edges
     bmesh.ops.subdivide_edges(
             bm,
+            smooth=0,
             edges = selected_edges,
             cuts=cuts,
             use_grid_fill=True
