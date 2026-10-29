@@ -35,6 +35,7 @@ from pathlib import Path
 
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
+import blender_gmsh_remesh
 
 try: # A broken settings log must never keep the addon from registering.
     import session_log
@@ -252,7 +253,7 @@ def get_min_max_z(obj, group_id=None):
 
     return (min_z, max_z)
 
-def shift_shrinkwrap_topology_batch(context,matrices=None):
+def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
     """
     Wrapper function to perform shift and shrinkwrap. Matrices are for tracking the absolute movement of the valves
     """
@@ -267,20 +268,21 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         pos_matrix_mitral = matrices[0]
         pos_matrix_aortic = matrices[1]
 
-    selected_names = [obj.name for obj in selected_objects]
+    selected_names = [obj.name for obj in selected_objects] if selected_names==[] else selected_names
     selected_names = sorted(selected_names, key=get_frame_number)
     
-    temp_name = selected_names[0]
+    cur_name = selected_names[0] # Sets first object as reference
     for i in range(1,len(selected_names)):
-        source = bpy.data.objects.get(temp_name)
+        source = bpy.data.objects.get(cur_name)
         source_copy = copy_object(source.name, source.name + '_COPY')
         target = bpy.data.objects.get(selected_names[i])
 
         # --- Shift and shrinkwrap the body part --- #
         shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
+        translate_mesh(context, source_copy,shift=shift_mitral - shift_aortic, group="MV") # Does a positive mitral shift then negative aortic shift on the mitral valve
         shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps 
-        translate_mesh(context, source_copy,shift=shift_mitral - shift_aortic, group="MV") # Fixes the mitral valve position
+        
 
         # --- Shift and shrinkwrap only the lower edge loop --- #
         ll_x_shift = get_min_max_x(target,0)[1] + get_min_max_x(target,0)[0] - get_min_max_x(source_copy,0)[1] - get_min_max_x(source_copy,0)[0]
@@ -292,15 +294,15 @@ def shift_shrinkwrap_topology_batch(context,matrices=None):
         #shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='PROJECT', group='lower_basal_edge_loop', use_axis=[0,0,0]) # Performs shrinkwrap on the lower edge loop
         #shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='NEAREST_SURFACEPOINT', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
         
-        temp_name = selected_names[i]
+        cur_name = selected_names[i] # Now the current target becomes the reference for the next iter
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
-        source_copy.name = temp_name # Rename reference object
+        source_copy.name = cur_name # Rename reference object
     
     # --- Retroactive smoothing to avoid cascading recurring smoothing (WIP) --- #
     for name in selected_names: # All the resulting objects post transformation should still have the same name
         obj = bpy.data.objects.get(name)
-        if name=='ventricle_0_basal': 
-            make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
+        """if name=='ventricle_0_basal': 
+            make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')"""
         smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
 
 def shift_shrinkwrap_topology_fullbody(context, matrices=None):
@@ -373,7 +375,7 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
         modifier.use_project_z = use_axis[2]
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
-def make_custom_group(context,obj, exclude_groups, name='body'):
+def make_custom_group(context, obj, exclude_groups, name='body'):
     """
     Function that adds a new group which only includes vertices that are not the valves and lower loop
     The group index are 0 for lower basal loop, 3 for mitral valve and 6 for aortic valve
@@ -381,21 +383,24 @@ def make_custom_group(context,obj, exclude_groups, name='body'):
     scene = context.scene
     view_layer = context.view_layer
     bpy.context.view_layer.objects.active = obj
-
-    bpy.ops.Object.mode_set(mode="OBJECT")
-    group = obj.vertex_groups.new(name=name)
-    v_indices = []
-    matching_group = True
-    for v in obj.data.vertices:
+    
+    if obj.vertex_groups.get(name) is not None:
+        pass
+    else:
+        bpy.ops.Object.mode_set(mode="OBJECT")
+        group = obj.vertex_groups.new(name=name)
+        v_indices = []
         matching_group = True
-        for g in v.groups:
-            if obj.vertex_groups[g.group].name in exclude_groups:
-                matching_group = False
-                break
-        if matching_group:
-            v_indices.append(v.index)
+        for v in obj.data.vertices:
+            matching_group = True
+            for g in v.groups:
+                if obj.vertex_groups[g.group].name in exclude_groups:
+                    matching_group = False
+                    break
+            if matching_group:
+                v_indices.append(v.index)
 
-    group.add(v_indices, 1,'REPLACE')
+        group.add(v_indices, 1,'REPLACE')
     
     return True
     
@@ -1223,7 +1228,17 @@ def update_value_for_translation(context, frame_id, pos_matrix_mitral, pos_matri
         context.scene.translation_mitral += mitral_diff
         context.scene.translation_aortic += aortic_diff
         return True
-        
+
+def gradual_remesh(context,obj):
+    """Wrapper function for remeshing from blender_gmsh_remesh module's remesh_object function. This time it replaces the object immediately""" 
+    blender_gmsh_remesh.remesh_object(obj,group_name=["AV","MV"])
+    # Here the object is remeshed and a copy of it is saved with "_remesh" appended to the end
+    obj_name = obj.name
+    remesh_name = obj.name + "_remesh"
+    bpy.data.objects.remove(obj, do_unlink=True) # Remove old object
+    remesh_obj = bpy.data.objects.get(remesh_name) # Get the new remeshed object
+    remesh_obj.name = obj_name # Then rename as old object
+      
 class MESH_OT_create_basal(bpy.types.Operator):
     """ Create a basal region equivalent for every frame of ventricles selected"""
     bl_idname = 'heart.create_basal'
@@ -1231,12 +1246,18 @@ class MESH_OT_create_basal(bpy.types.Operator):
     def execute(self, context):
         _, pos_matrices = mesh_create_basal_batch(context)
         
+        # Saves all the currently selected object just in case
+        selected_names = [object.name for object in context.selected_objects]
+        selected_names = sorted(selected_names, key=get_frame_number)
         # Subdivide the first object before morphing
-        obj = context.selected_objects[0]
+        obj = bpy.data.objects.get(selected_names[0])
+        
+        # Performs the gradual remeshing
+        gradual_remesh(context,obj)
+        obj = bpy.data.objects.get(selected_names[0]) # Reassign object as it was replaced during remesh, even if not it will not matter
         make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
-        subdivide_vertex_group(context, obj, groups=["body", "AV_Boundary", "MV_Boundary"], cuts=1)
         # Here the issue is that the vertex group for lower edge increases after subdivision
-        shift_shrinkwrap_topology_batch(context, pos_matrices)
+        shift_shrinkwrap_topology_batch(context, pos_matrices, selected_names)
         return{'FINISHED'} 
 
 def mesh_create_basal_batch(context):
@@ -2486,7 +2507,10 @@ def test_function(context):
     #cobj2 = selected_objects[1]
     #cons_print(compareMeshes(cobj,cobj2))
     #obj = bpy.context.edit_object
-    subdivide_vertex_group(context, cobj, groups=["body", "AV_Boundary", "MV_Boundary"], cuts=1)
+    #subdivide_vertex_group(context, cobj, groups=["body", "AV_Boundary", "MV_Boundary"], cuts=1)
+    #blender_gmsh_remesh.main()
+    #make_custom_group(context, cobj, ['AV','MV'], name="body")
+    translate_mesh(context, cobj,shift=(0,0,0.5), group="MV")
     return True
 
 def compareMeshes(mesh1, mesh2, group=None):
