@@ -280,9 +280,12 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         # --- Shift and shrinkwrap the body part --- #
         shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
-        translate_mesh(context, source_copy,shift=shift_mitral - shift_aortic, group="MV") # Does a positive mitral shift then negative aortic shift on the mitral valve
-        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps 
+        """translate_mesh(context, source_copy,shift=shift_mitral - shift_aortic, group="MV") # Does a positive mitral shift then negative aortic shift on the mitral valve
+        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps """
         
+        # Test the reverse by shifting overall object based on mitral position
+        translate_mesh(context, source_copy,shift=shift_aortic - shift_mitral, group="AV") # reverse
+        shift_shrinkwrap_topology(context, source_copy, target, shift_mitral, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps 
 
         # --- Shift and shrinkwrap only the lower edge loop --- #
         ll_x_shift = get_min_max_x(target,0)[1] + get_min_max_x(target,0)[0] - get_min_max_x(source_copy,0)[1] - get_min_max_x(source_copy,0)[0]
@@ -1639,7 +1642,7 @@ def mesh_connect_apical_and_basal_pairs(context):
     inset_faces_smooth(context)
     new_triangulate_edge_indices = triangulate_connection(True, apical_ref) # Triangulation reference
 
-    #bpy.data.objects.remove(apical_ref) # Remove reference
+    bpy.data.objects.remove(apical_ref) # Remove reference
     volumelist = compute_volumes(selected_objects, False) # Prepare volumes for smoothing
 
     # Bridge every pair of basal and apical objects using the 
