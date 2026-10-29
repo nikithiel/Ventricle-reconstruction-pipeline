@@ -255,3 +255,8 @@ GVR-Pipeline-spare.blend
 # plot script
 plot.py
 test.py
+
+basal_small_smooth
+basal_smooth
+
+.gitignore
