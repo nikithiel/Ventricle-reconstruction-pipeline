@@ -47,7 +47,6 @@ NUR_GLAETTEN = False    # True: gmsh überspringen, nur das vorhandene Netz
 ALGORITHMUS = 6         # gmsh-Verfahren: 6 = Frontal-Delaunay, 5 = Delaunay,
                         # 1 = MeshAdapt (robust bei kniffligen Flächen)
 GMSH_INSTALLIEREN = True  # gmsh bei Bedarf automatisch per pip installieren
-SELBSTTEST = False      # True: Testwürfel erzeugen und neu vernetzen
 AUSFUEHRLICH = False    # True: ausführliche gmsh-Ausgabe in der Systemkonsole
 
 # =============================================================================
@@ -1752,31 +1751,6 @@ def remesh_object(obj, group_name=VERTEXGRUPPE, target_size=ZIELGROESSE,
                          scale_note=any(abs(s - 1.0) > 1e-6 for s in obj.scale))
     return new, lines
 
-
-def _make_selftest_object():
-    """Würfel 2x2x2: Oberseite fein (fest, 20x20 Vierecke), Rest grob."""
-    bm = bmesh.new()
-    bmesh.ops.create_cube(bm, size=2.0)
-    top = [f for f in bm.faces if all(v.co.z > 0.999 for v in f.verts)]
-    bmesh.ops.subdivide_edges(bm, edges=list(top[0].edges), cuts=19,
-                              use_grid_fill=True)
-    rest = [f for f in bm.faces if not all(v.co.z > 0.999 for v in f.verts)]
-    bmesh.ops.triangulate(bm, faces=rest, quad_method='BEAUTY',
-                          ngon_method='BEAUTY')
-    me = bpy.data.meshes.new("Remesh_Selbsttest")
-    bm.to_mesh(me)
-    bm.free()
-    obj = bpy.data.objects.new("Remesh_Selbsttest", me)
-    bpy.context.collection.objects.link(obj)
-    vg = obj.vertex_groups.new(name="fest")
-    vg.add([v.index for v in me.vertices if v.co.z > 0.999], 1.0, 'REPLACE')
-    for o in bpy.context.selected_objects:
-        o.select_set(False)
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
-    return obj
-
-
 def _popup(lines, title, icon='INFO'):
     def draw(self, context):
         for line in lines:
@@ -1789,15 +1763,7 @@ def _popup(lines, title, icon='INFO'):
 
 def main():
     try:
-        if SELBSTTEST:
-            obj = _make_selftest_object()
-            new, lines = remesh_object(obj, group_name="fest", target_size=0.3,
-                                       growth=1.2, mode="gruppe", only_smooth=False,
-                                       fixed_boundaries="alle",
-                                       name_suffix="_remesh")
-            lines.insert(0, "Selbsttest erfolgreich")
-        else:
-            new, lines = remesh_object(bpy.context.active_object)
+        new, lines = remesh_object(bpy.context.active_object)
         print("\n".join(lines))
         _popup(lines, "Remesh fertig")
     except RemeshError as e:

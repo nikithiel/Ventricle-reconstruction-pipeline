@@ -179,36 +179,41 @@ def get_value(self):
 def set_value(self,value):
     self["ventricle_import_dir"] = value
 
-def translate_mesh(context, obj, shift, group=None):
+def translate_mesh(context, obj, shift, group=None, return_to_object=True):
     """Translates a mesh, if a group is given, then only translates the vertices of that mesh that belongs to that group"""
+    bpy.context.view_layer.objects.active = obj
     if group is not None: # A vertex group is specified, we only shift vertices in this group. The group has to be inputted as string
-        bpy.ops.Object.mode_set(mode="EDIT")
+        if obj.mode != "EDIT": bpy.ops.Object.mode_set(mode="EDIT")
         bpy.ops.mesh.select_all( action = 'DESELECT' )
         bpy.ops.object.vertex_group_set_active(group=group)
         bpy.ops.object.vertex_group_select()
-
-    if obj.mode == "EDIT":
         bm = bmesh.from_edit_mesh(obj.data)
         edbm = True
-    else:
-        bm = bmesh.new()
-        bm.from_mesh(obj.data)
-        edbm = False
-
-    if not edbm:
-        for v in bm.verts:
-            for i in range(len(v.co)):
-                v.co[i] += shift[i]
-    else:
         for v in bm.verts:
             if v.select:
                 for i in range(len(v.co)):
                     v.co[i] += shift[i]
-    
+        bmesh.update_edit_mesh(obj.data)
+        if return_to_object: bpy.ops.object.mode_set(mode="OBJECT")
+        return True
+
+    # Everything else
+    else:
+        if obj.mode == "EDIT": bpy.ops.Object.mode_set(mode="OBJECT")
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        edbm = False
+        if not edbm:
+            for v in bm.verts:
+                for i in range(len(v.co)):
+                    v.co[i] += shift[i]
     if not edbm:
         bm.to_mesh(obj.data)
-    obj.data.update()
-    bpy.ops.Object.mode_set(mode="OBJECT")
+        bm.free()
+        obj.data.update()
+    else:
+        bmesh.update_edit_mesh(obj.data)
+    if return_to_object: bpy.ops.object.mode_set(mode="OBJECT")
     return True
 
 def get_min_max_x(obj, group_id=None):
@@ -268,7 +273,11 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         pos_matrix_mitral = matrices[0]
         pos_matrix_aortic = matrices[1]
 
-    selected_names = [obj.name for obj in selected_objects] if selected_names==[] else selected_names
+    if selected_names == []:
+        selected_names = [obj.name for obj in selected_objects]
+    else:
+        selected_names = selected_names
+    cons_print(selected_names)
     selected_names = sorted(selected_names, key=get_frame_number)
     
     cur_name = selected_names[0] # Sets first object as reference
@@ -276,7 +285,6 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         source = bpy.data.objects.get(cur_name)
         source_copy = copy_object(source.name, source.name + '_COPY')
         target = bpy.data.objects.get(selected_names[i])
-
         # --- Shift and shrinkwrap the body part --- #
         shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
@@ -284,8 +292,16 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps """
         
         # Test the reverse by shifting overall object based on mitral position
-        translate_mesh(context, source_copy,shift=shift_aortic - shift_mitral, group="AV") # reverse
-        shift_shrinkwrap_topology(context, source_copy, target, shift_mitral, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps 
+        cons_print(source_copy.name)
+        cons_print(target.name)
+        cons_print(shift_aortic)
+        cons_print(shift_mitral)
+
+        translate_mesh(context, source_copy, shift=shift_aortic - shift_mitral, group="AV", return_to_object = False) # reverse
+        translate_mesh(context, source_copy, shift = shift_mitral, group=None, return_to_object=False)
+        #shift_shrinkwrap_topology(context, source_copy, target, None, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps 
+        #translate_mesh(context, source_copy, shift=(0,0,0),group=None)
+        #translate_mesh(context, source_copy, shift=shift_mitral, group="MV", return_to_object = False)
 
         # --- Shift and shrinkwrap only the lower edge loop --- #
         ll_x_shift = get_min_max_x(target,0)[1] + get_min_max_x(target,0)[0] - get_min_max_x(source_copy,0)[1] - get_min_max_x(source_copy,0)[0]
@@ -293,20 +309,20 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         ll_z_shift = get_min_max_z(target,0)[1] + get_min_max_z(target,0)[0] - get_min_max_z(source_copy,0)[1] - get_min_max_z(source_copy,0)[0]
         
         lower_loop_shift = [0.5 * ll_x_shift, 0.5* ll_y_shift, 0.5 * ll_z_shift] # Calcs the difference between the lowest points between source and target
-        #translate_mesh(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop') # Shifts only the lower edge loop according to above line
+        translate_mesh(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', return_to_object=True) # Shifts only the lower edge loop according to above line
         #shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='PROJECT', group='lower_basal_edge_loop', use_axis=[0,0,0]) # Performs shrinkwrap on the lower edge loop
         #shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='NEAREST_SURFACEPOINT', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
         
         cur_name = selected_names[i] # Now the current target becomes the reference for the next iter
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
-        source_copy.name = cur_name # Rename reference object
+        source_copy.name = cur_name # Rename shrinkwrapped object to the current
     
     # --- Retroactive smoothing to avoid cascading recurring smoothing (WIP) --- #
     for name in selected_names: # All the resulting objects post transformation should still have the same name
         obj = bpy.data.objects.get(name)
         """if name=='ventricle_0_basal': 
             make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')"""
-        smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
+        #smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
 
 def shift_shrinkwrap_topology_fullbody(context, matrices=None):
     """
@@ -1256,7 +1272,7 @@ class MESH_OT_create_basal(bpy.types.Operator):
         obj = bpy.data.objects.get(selected_names[0])
         
         # Performs the gradual remeshing
-        gradual_remesh(context,obj)
+        #gradual_remesh(context,obj)
         obj = bpy.data.objects.get(selected_names[0]) # Reassign object as it was replaced during remesh, even if not it will not matter
         make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
         # Here the issue is that the vertex group for lower edge increases after subdivision
@@ -1994,7 +2010,6 @@ class MESH_OT_Ventricle_Sort(bpy.types.Operator):
     bl_idname = 'heart.sort_ventricles'
     bl_label = 'Sort ventricles by volume starting with ESV.'
     def execute(self, context):
-        #cons_print(np.array(context.object["mitral_position_matrix"]))
         if not sort_ventricles(context.selected_objects): return{'CANCELLED'}
         return{'FINISHED'}
 
@@ -2516,7 +2531,8 @@ def test_function(context):
     #subdivide_vertex_group(context, cobj, groups=["body", "AV_Boundary", "MV_Boundary"], cuts=1)
     #blender_gmsh_remesh.main()
     #make_custom_group(context, cobj, ['AV','MV'], name="body")
-    translate_mesh(context, cobj,shift=(0,0,0.5), group="MV")
+    #reset_values(context)
+    translate_mesh(context,cobj,shift=[0,0,1],group=None)
     return True
 
 def compareMeshes(mesh1, mesh2, group=None):
@@ -2557,6 +2573,9 @@ def compareMeshes(mesh1, mesh2, group=None):
     #if we make it through all the checks, we have a match!
     return "It matches!"
 
+def reset_values(context):
+    context.scene.translation_mitral = (0,-4,50.5)
+    context.scene.translation_aortic = (0,4,50.5)
 
 #-----
 
@@ -3562,10 +3581,6 @@ class MESH_OT_store_ref_positions(bpy.types.Operator):
                         aortic_relative_positions.append(np.array(v.co))
             else:
                 cons_print('Not in edit mode')
-        
-        #cons_print(f"Value stored for mitral and aortic as {mitral_relative_positions[2]} and {aortic_relative_positions[2]} respectively")
-        #context.scene.mitral_positions = mitral_relative_positions
-        #context.scene.aortic_positions = aortic_relative_positions
         
         # Store the values in every object?
         for obj in selected_objects:
