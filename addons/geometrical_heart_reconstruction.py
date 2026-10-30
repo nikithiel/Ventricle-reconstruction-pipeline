@@ -1960,7 +1960,9 @@ def subdivide_vertex_group(context, obj, groups=[], cuts=1):
     bpy.context.view_layer.objects.active = obj # Set object as active
     if obj.mode != "EDIT": # If not edit mode, go edit mode
         bpy.ops.object.mode_set(mode="EDIT")
-    
+
+    #WIP
+    #bpy.ops.mesh.select_more()
     bm = bmesh.from_edit_mesh(obj.data)
     
     
@@ -1976,6 +1978,7 @@ def subdivide_vertex_group(context, obj, groups=[], cuts=1):
     # Perform subdivision on the selected edges
     bmesh.ops.subdivide_edges(
             bm,
+            smooth=0,
             edges = selected_edges,
             cuts=cuts,
             use_grid_fill=True
