@@ -38,6 +38,7 @@ from pathlib import Path
 
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
+from valve_geometry_check import run_valve_area_check
 
 try: # A broken settings log must never keep the addon from registering.
     import session_log
@@ -1784,6 +1785,39 @@ def check_pipeline_triangulated(context, ventricles):
                     f"The CFD export needs one shared topology across all frames.")
     return None
 
+def report_valve_areas(operator, context, ventricles):
+    """Compare the built valve areas with calculate_valve_diameters.py and print the result.
+
+    Warns only: a deviation is reported in the System Console and as a warning, but never aborts.
+    """
+    _cons_rule("Valve area check")
+    try:
+        ok, lines, short = run_valve_area_check(context, ventricles)
+    except Exception as e: # The check must never break a finished reconstruction.
+        msg = f"Valve area check failed: {e}"
+        cons_print(msg)
+        operator.report({'WARNING'}, msg)
+        return False
+    for line in lines: cons_print(line)
+    operator.report({'INFO'} if ok else {'WARNING'}, short)
+    return ok
+
+class MESH_OT_check_valve_areas(bpy.types.Operator):
+    """Compare the built mitral and aortic valve areas with the areas fitted by 'Calculate Radii' (summary.csv)"""
+    bl_idname = 'heart.check_valve_areas'
+    bl_label = 'Check valve areas'
+    def execute(self, context):
+        ventricles = find_ventricle_objects(context.selected_objects)
+        if not ventricles: # Nothing selected: take all top-level ventricle frames of the scene.
+            ventricles = find_ventricle_objects([o for o in context.scene.objects if o.parent is None and o.name.startswith("ventricle_")])
+        if not ventricles:
+            msg = "Check valve areas: no ventricle objects (ventricle_<n>) found."
+            cons_print(msg)
+            self.report({'ERROR'}, msg)
+            return {'CANCELLED'}
+        report_valve_areas(self, context, ventricles)
+        return {'FINISHED'}
+
 class MESH_OT_Quick_Recon(bpy.types.Operator):
     """Quick geometrical reconstruction of all ventricles containing all steps of the reconstruction algorithm in one execution"""
     bl_idname = 'heart.quick_recon'
@@ -1804,6 +1838,7 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
             cons_print(error)
             self.report({'ERROR'}, error)
             return {'CANCELLED'}
+        report_valve_areas(self, context, ventricles) # Warn only if the built valve areas differ from 'Calculate Radii'.
         return{'FINISHED'} 
 
 def cleanup_basal_region(context):
@@ -2180,6 +2215,11 @@ class PANEL_Valves(bpy.types.Panel):
         row.prop(context.scene, 'angle_aortic', text="Angle")
         row = layout.row()
         row.prop(context.scene, 'aortic_radius', text="Aortic radius", icon='META_BALL')
+        row = layout.row()
+        row.label(text= "Valve area check")
+        row = layout.row()
+        row.prop(context.scene, 'valve_check_imperm_open', text="imperm counts as open")
+        row.prop(context.scene, 'valve_check_tolerance', text="Tolerance")
         if dev_env_tools:
             # Calculate Valve Radii
             row = layout.row()
@@ -2305,6 +2345,8 @@ class PANEL_Dev_tools(bpy.types.Panel):
         layout.operator('heart.dev_check_edges', text= "Get edge index", icon = 'ARROW_LEFTRIGHT')
         row = layout.row()
         layout.operator('heart.dev_check_node_connectivity', text= "Node-connectivity check", icon = 'MOD_PARTICLES') 
+        row = layout.row()
+        layout.operator('heart.check_valve_areas', text= "Check valve areas", icon = 'MESH_CIRCLE')
         # Color minimal distance button
         row = layout.row()
         layout.operator('heart.color_min_dist', text= "Color minimal distance to raw object", icon = 'COLORSET_04_VEC') 
@@ -3196,7 +3238,7 @@ classes = [
     MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,
 ]
 
-dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_object_transform, MESH_OT_calculate_valve_diameter]
+dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, MESH_OT_object_transform, MESH_OT_calculate_valve_diameter, MESH_OT_check_valve_areas]
 
 # Add new properties to the dict. register() and unregister() does not need to be changed. They will automatically register/unregister all properties in the dict.
 scene_properties = {
@@ -3221,6 +3263,9 @@ scene_properties = {
     "aortic_radius": bpy.props.FloatProperty(name="aortic_radius", default=2, min=0.01),
     "translation_aortic": bpy.props.FloatVectorProperty(name="Aortic valve translation", default=(0, 0, 1)),
     "angle_aortic": bpy.props.FloatVectorProperty(name="Aortic valve rotation", default=(0, 0, 0)),
+    # Valve area check (valve_geometry_check.py), run at the end of 'Quick reconstruction'.
+    "valve_check_imperm_open": bpy.props.BoolProperty(name="imperm counts as open", description="Valve area check: compare the fitted area with the full valve disc (on) or only with the perm and res zones, i.e. imperm treated as a wall in the CFD (off)", default=True),
+    "valve_check_tolerance": bpy.props.FloatProperty(name="Valve area tolerance", description="Valve area check: allowed deviation of the checked valve area from the fitted area", default=2.0, min=0.0, max=100.0, subtype='PERCENTAGE'),
     # Support structure.
     "ref_minima": bpy.props.FloatVectorProperty(name="Minima of reference object", default=(0, 0, 0)),
     "ref_maxima": bpy.props.FloatVectorProperty(name="Maxima of reference object", default=(0, 0, 1)),

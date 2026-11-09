@@ -59,7 +59,7 @@ main(args=['install','pandas'])
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:
 - Search *LoopTools* → check *Mesh: LoopTools* → Save Preferences.
-- Install stl-plot.py, calculate_valve_diameters.py and then ventricle-reconstruction-pipeline.py (**in this order**) from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
+- Install stl-plot.py, calculate_valve_diameters.py, valve_geometry_check.py and then ventricle-reconstruction-pipeline.py (**in this order**) from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
 - Open the GVR-Pipeline.blend scene from the repository → after that a new category should appear on the right side of the 3D Viewport called 'GVR-Pipeline'. Clicking it will open panels containing buttons, etc. used for the pipeline.
 # Usage
 Video-tutorial: https://www.youtube.com/watch?v=0sduwcDeSm8 \
@@ -127,7 +127,7 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
 Select all ventricle objects and either run all steps with the button 'Quick reconstruction' in the panel 'Geometric ventricle reconstruction pipeline' or do the following steps for a more comprehensive execution of the pipeline:\
 ![Image of the setup pipeline](/readme_images/Pipeline_optional.png)
 
-Every step triangulates the geometry it creates, so all reconstructed objects (ventricles, aorta, atrium, valve zones) are pure triangle meshes; the per-ventricle vertex count therefore rises slightly. The mitral and aortic valve discs stay untouched — same nodes, same faces — as they form the interface to atrium and aorta. **Quick reconstruction** checks the result at the end and aborts, naming the object and face in the System Console, if a non-triangular face remains or the frames stop sharing one topology. The four manual buttons triangulate too; only *Quick reconstruction* runs that final check.
+Every step triangulates the geometry it creates, so all reconstructed objects (ventricles, aorta, atrium, valve zones) are pure triangle meshes; the per-ventricle vertex count therefore rises slightly. The mitral and aortic valve discs stay untouched — same nodes, same faces — as they form the interface to atrium and aorta. **Quick reconstruction** checks the result at the end and aborts, naming the object and face in the System Console, if a non-triangular face remains or the frames stop sharing one topology. The four manual buttons triangulate too; only *Quick reconstruction* runs that final check. After it, *Quick reconstruction* also runs the valve area check (see *Check valve areas* below). That check only warns and never aborts.
 
 1. Remove basal region\
     1.1. Press button 'Remove basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
@@ -186,6 +186,25 @@ Check the node-connectivity of all selected objects. This includes:
 - a check if the edges and faces of all objects are created with the same vertices
 ### Color minimal distance to raw object
 During the usage of the pipeline the longitudinal shift is saved as a variable bound to the respective object (ventricle 0 ... X). The user has to re-import the raw data and rename it to 'ref_obj'. While the reconstructed object is selected pressing the button 'Color minimal distance to raw object' will compute the minimal distance from each face-center of the reconstructed ventricle to any face-center of the reference object resulting in a 3d-representation of the Hausdorff distance (https://cgm.cs.mcgill.ca/~godfried/teaching/cg-projects/98/normand/main.html). The faces of the object are then colored with the distances which are normalized with the maximum value resulting in a scale from 0 to 1 (blue→white→red). To view the colors select 'Material Preview' in Blender (top right in 3D Viewport). This process give a qualitative visual representation of the quality of the reconstruction pipeline.
+
+### Check valve areas
+Compares the mitral and aortic valve areas of the built geometry with the areas that *Calculate Radii* fitted. It runs automatically at the end of *Quick reconstruction* and on this button, for the selected ventricles or, if none are selected, for all `ventricle_<n>` objects. The result goes to the System Console; a deviation above the tolerance is reported as a warning.
+- **Why it is needed:** the radii are not drawn as circles or ellipses. They scale template meshes (`A*_MV_Boundary`, `A*_MV_Surface`, the porous zones, atrium, aorta). The built area is therefore *a · r_long · r_small* (MV) or *a · r²* (AV), where *a* is the template's area at unit scale. *Calculate Radii* assumes *a = π*. That holds for the AV template (a unit circle, 99.4 % of π). The D-shaped MV template has *a* = 2.56 (81.6 % of π).
+- **What it measures:**
+  - the valve disc of every frame (faces in vertex group `MV` / `AV`); the output states how many frames were measured and whether they are identical;
+  - the porous zones `mv_*` / `av_*` (A4), or for A3 an estimate from the zone shares of the templates;
+  - as a cross-check, the bottom discs of `atrium` and `aorta`. In A3 they lie in the valve plane; in A4 they sit on top of the porous zones (0.1 · s_z above the valve plane, s_z = (r_long + r_small)/2 or r_AV). The note gives the height and the area; a gap or overlap between zones and vessel is reported.
+  - The A5 mitral valve is a 3D valve and is not checked.
+- **Target:** `A_MV` / `A_AV` from `calc_valve_diameters_outputs/summary.csv` of the case the Import folder belongs to. Without that file the target is the area the GUI radii stand for. A note is printed if the GUI radii differ from `summary.csv`, for example after a manual change.
+- **Settings** (panel *Valve options*):
+  - *imperm counts as open*: on compares the target with the full disc (imperm treated like res in the CFD); off compares it with perm + res only (imperm as a wall).
+  - *Tolerance*: allowed area deviation, default 2 %.
+- **Output per valve:** the areas, their share of the target, the resulting mean velocity factor at equal flow and the radius factor that would make the area match.
+
+The same comparison runs outside Blender with `tools/valve_area_diagnosis.py` (standard library only). It reads the templates from `GVR-Pipeline.blend` and measures exported STLs. Example from the repository root:
+```bash
+python tools/valve_area_diagnosis.py --map --export dataset/example/export --session dataset/example/Session_Logs/<session>.json --summary dataset/example/calc_valve_diameters_outputs/summary.csv
+```
 
 ### Transform Objects
 By selecting multiple meshes with similar orientation, this button picks a mesh to use as reference, and then creates of copy and transform it into each of the other selected meshes. This aims to make sure that all the meshes share the same topology. It is transformed using a BvH Tree based transformation.

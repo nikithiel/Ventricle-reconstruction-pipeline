@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "addon_version": "2.1",
+    "trigger": "session_close",
+    "written_at": "2026-10-06 13:48:19",
+    "blend_file": "GVR-Pipeline.blend"
+  },
+  "files": {
+    "import_dir": "dataset\\example\\STL\\",
+    "export_dir": "dataset\\example\\export\\"
+  },
+  "position": {
+    "pos_top": [0.259392, 7.415807, 51.29776],
+    "pos_bot": [0.0, 0.0, 0.0],
+    "pos_septum": [-18.442162, 1.021482, 40.039665],
+    "rotation": {
+      "performed_at": "2026-07-09 17:28:32",
+      "selected_points": {
+        "top": [22.429914, 20.542181, 65.918228],
+        "bot": [22.212591, 14.999789, 13.118249],
+        "septum": [31.835402, 33.398602, 60.297832]
+      },
+      "rotation_rad": [0.104587, -0.004093, 0.613818],
+      "rotation_deg": [5.9924, -0.2345, 35.1692],
+      "translation": [-22.212591, -14.999789, -13.118249]
+    }
+  },
+  "valves": {
+    "mitral": {
+      "translation_mm": [0.0, -4.0, 50.5],
+      "angle_deg": [0.0, 0.0, 0.0],
+      "radius_long": 3.6,
+      "radius_small": 3.05
+    },
+    "aortic": {
+      "translation_mm": [0.0, 4.0, 50.5],
+      "angle_deg": [-15.0, 0.0, 0.0],
+      "radius": 2.89
+    }
+  },
+  "setup_variables": {
+    "remove_basal_threshold": 42.0,
+    "mean_reference": false,
+    "interpolation": {
+      "time_rr": 0.557,
+      "time_diastole": 0.31892,
+      "frames_ventricle": 70
+    },
+    "poisson_depth": 10,
+    "connection": {
+      "connection_twist": 0,
+      "inset_faces_refinement_steps": 1
+    },
+    "connection_smoothing": {
+      "max_con_sm_iter": 25,
+      "min_con_sm_iter": 4,
+      "sm_reps": 2,
+      "con_fade_percentage": 20.0,
+      "final_sm_iter": 10
+    }
+  },
+  "pipeline": {
+    "approach": 4
+  },
+  "comparison": {
+    "plot_input_path": "dataset\\example\\export\\",
+    "live_compare": false,
+    "live_delete_temp": false
+  },
+  "internal": {
+    "height_plane": 45.838608,
+    "min_valves": 49.677216,
+    "ref_minima": [-12.374917, -14.533265, 0.0],
+    "ref_maxima": [14.307667, 7.919345, 40.464489],
+    "reference_object_name": "ventricle_7"
+  }
+}
