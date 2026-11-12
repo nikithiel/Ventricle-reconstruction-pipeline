@@ -26,12 +26,14 @@ import subprocess
 import importlib.util
 import time
 import warnings
+from mathutils import Vector
 
 import matplotlib
 matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
 import multiprocessing as mp
 from pathlib import Path
+#from pygem import RBF
 
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
@@ -308,11 +310,24 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
     cons_print(selected_names)
     selected_names = sorted(selected_names, key=get_frame_number)
     
+    # Prepare custom groups
     for i in range(0,len(selected_names)):
         make_custom_group(context,
                           bpy.data.objects.get(selected_names[i]), 
                           exclude_groups=["AV","MV","lower_basal_edge_loop"],
                           name="body")
+        make_custom_group(context,
+                          bpy.data.objects.get(selected_names[i]), 
+                          exclude_groups=["AV_Boundary","MV","body","lower_basal_edge_loop"],
+                          name="AV_deep")
+        make_custom_group(context,
+                          bpy.data.objects.get(selected_names[i]), 
+                          exclude_groups=["MV_Boundary","AV","body","lower_basal_edge_loop"],
+                          name="MV_deep")
+        make_custom_group(context,
+                          bpy.data.objects.get(selected_names[i]), 
+                          exclude_groups=["AV_deep","MV_deep"],
+                          name="body_more")     
     
     cur_name = selected_names[0] # Sets first object as reference
     for i in range(1,len(selected_names)):
@@ -322,18 +337,6 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         # --- Shift and shrinkwrap the body part --- #
         shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
-        """translate_mesh(context, source_copy,shift=shift_mitral - shift_aortic, group="MV") # Does a positive mitral shift then negative aortic shift on the mitral valve
-        shift_shrinkwrap_topology(context, source_copy, target, shift_aortic, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps """
-        
-        # Test the reverse by shifting overall object based on mitral position
-        cons_print(source_copy.name)
-        cons_print(target.name)
-        cons_print(shift_aortic)
-        cons_print(shift_mitral)
-
-        """translate_mesh(context, source_copy, shift = (0,0,0), group=None, return_to_object=False)
-        translate_mesh(context, source_copy, shift=shift_aortic - shift_mitral, group="AV", return_to_object = False) # reverse
-        translate_mesh(context, source_copy, shift = shift_mitral, group=None, return_to_object=False)"""
         
         translate_mesh_object(context, source_copy, shift = (0,0,0), group=None, return_to_object=False)
         translate_mesh_object(context, source_copy, shift = 0.5 * (shift_mitral + shift_aortic), group=None, return_to_object=False)
@@ -347,20 +350,18 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         
         lower_loop_shift = [0.5 * ll_x_shift, 0.5* ll_y_shift, 0.5 * ll_z_shift] # Calcs the difference between the lowest points between source and target
         
-        #translate_mesh(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', return_to_object=True) # Shifts only the lower edge loop according to above line
         translate_mesh_object(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', return_to_object=True)
 
-        temp_target = extract_vertex_group_object(target, "body", target.name + "_body")
-        shift_shrinkwrap_topology(context, source_copy, temp_target, shift=None, shrinkwrap='NEAREST_VERTEX', group='body') # Shifts and then shrinkwraps body of the basal region
-        bpy.data.objects.remove(temp_target, do_unlink=True)
-        #translate_mesh(context, source_copy, shift=(0,0,0),group=None)
-        #translate_mesh(context, source_copy, shift=shift_mitral, group="MV", return_to_object = False)
-        
-        # --- Here create a copy of the lower basal edge loop and then shrinkwrap to it
+        ### --- After position is moved to overlap as much as possible, the morphing is performed --- ###
+        # --- Here separate a copy of the lower basal edge loop and then shrinkwrap to it
         temp_target = extract_vertex_group_object(target, "lower_basal_edge_loop", target.name + "_lower_basal_edge_loop")
         shift_shrinkwrap_topology(context, source_copy, temp_target, shift= None, shrinkwrap='NEAREST_VERTEX', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
         bpy.data.objects.remove(temp_target, do_unlink=True)
-        #shift_shrinkwrap_topology(context, source_copy, target, shift= None, shrinkwrap='NEAREST_SURFACEPOINT', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
+        
+        # --- Here separate copy of the body and then shrinkwrap to it
+        temp_target = extract_vertex_group_object(target, "body_more", target.name + "_body_more")
+        shift_shrinkwrap_topology(context, source_copy, temp_target, shift=None, shrinkwrap='NEAREST_SURFACEPOINT', group='body_more') # Shifts and then shrinkwraps body of the basal region
+        bpy.data.objects.remove(temp_target, do_unlink=True)
         
         # Prep for next iter
         cur_name = selected_names[i] # Now the current target becomes the reference for the next iter
@@ -372,7 +373,7 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         obj = bpy.data.objects.get(name)
         """if name=='ventricle_0_basal': 
             make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')"""
-        #smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
+        smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
  
 def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body', use_axis=[0,0,0]):
     """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
@@ -402,6 +403,88 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
         modifier.use_project_z = use_axis[2]
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
+def RBF_morph(context, source, target): # WIP
+    # Extract source vertices
+    source_vertices = np.array([
+        source.matrix_world @ v.co
+        for v in source.data.vertices
+    ])
+    
+    # Create RBF
+    rbf = RBF(
+        original_control_points=source_controls,
+        deformed_control_points=target_controls,
+        func="thin_plate_spline"
+    )
+    
+    # Calculate deformation for every source vertex
+    new_vertices = rbf(source_vertices)
+
+    # Update Blender mesh
+    inverse = source.matrix_world.inverted()
+
+    for i, vertex in enumerate(source.data.vertices):
+        vertex.co = inverse @ new_vertices[i]
+
+    source.data.update()
+
+def gradual_mesh_translate(obj, shift, group):
+    return None
+
+def gradual_mesh_translate_test(obj, shift, group):
+    obj = bpy.context.object
+
+    # Vertex group containing the open boundary loop
+    boundary_group = obj.vertex_groups[group]
+
+    # Parameters
+    displacement = Vector(shift)
+    influence_distance = 5.0
+
+    # Get mesh
+    mesh = obj.data
+
+    # Store original coordinates
+    original_positions = [v.co.copy() for v in mesh.vertices]
+
+    # Get boundary vertices
+    boundary_vertices = []
+
+    for vertex in mesh.vertices:
+        try:
+            weight = boundary_group.weight(vertex.index)
+            if weight > 0.0:
+                boundary_vertices.append(vertex.index)
+        except RuntimeError:
+            pass
+
+    # Calculate distance from each vertex to the boundary
+    for vertex in mesh.vertices:
+
+        min_distance = float("inf")
+
+        for boundary_index in boundary_vertices:
+            distance = (
+                original_positions[vertex.index]
+                - original_positions[boundary_index]
+            ).length
+
+            min_distance = min(min_distance, distance)
+
+        # Calculate influence
+        t = min(min_distance / influence_distance, 1.0)
+
+        # Smooth falloff
+        weight = 1.0 - (t * t * (3.0 - 2.0 * t))
+
+        # Apply displacement
+        vertex.co = (
+            original_positions[vertex.index]
+            + displacement * weight
+        )
+
+    mesh.update()
+    
 def make_custom_group(context, obj, exclude_groups, name='body'):
     """
     Function that adds a new group which only includes vertices that are not the valves and lower loop
@@ -467,10 +550,16 @@ def extract_vertex_group_object(obj, group, new_name):
         if e.vertices[0] in vert_mapping
         and e.vertices[1] in vert_mapping
     ]
+    
+    faces = [
+        tuple(vert_mapping[i] for i in poly.vertices)
+        for poly in obj.data.polygons
+        if all(i in vert_mapping for i in poly.vertices)
+    ]
 
     # Create new mesh
     new_mesh = bpy.data.meshes.new(new_name + "_Mesh")
-    new_mesh.from_pydata(vertices, edges, [])
+    new_mesh.from_pydata(vertices, edges, faces)
     new_mesh.update()
 
     new_obj = bpy.data.objects.new(new_name, new_mesh)
@@ -1327,7 +1416,7 @@ class MESH_OT_create_basal(bpy.types.Operator):
         obj = bpy.data.objects.get(selected_names[0])
         
         # Performs the gradual remeshing
-        #gradual_remesh(context,obj)
+        gradual_remesh(context,obj)
         obj = bpy.data.objects.get(selected_names[0]) # Reassign object as it was replaced during remesh, even if not it will not matter
         make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
         # Here the issue is that the vertex group for lower edge increases after subdivision
@@ -1383,7 +1472,6 @@ def mesh_create_basal(context, selected_objects):
         basal.select_set(False)
         basal.hide_set(False)
     # Remove old basal region objects.
-    #if context.scene.approach == 5: bpy.data.objects.remove(bpy.data.objects["basal_ref"], do_unlink=True)
     bpy.data.objects.remove(bpy.data.objects[newname], do_unlink=True)
     bpy.data.objects.remove(bpy.data.objects[newname + "_poisson"], do_unlink=True)
     return basal_regions
@@ -2578,25 +2666,9 @@ def test_function(context):
     scene = context.scene
     view_layer = context.view_layer
     selected_objects = context.selected_objects
-    #source_copy = selected_objects[1]
     cobj = selected_objects[0]
     #cobj2 = selected_objects[1]
-    #cons_print(compareMeshes(cobj,cobj2))
-    #obj = bpy.context.edit_object
-    #subdivide_vertex_group(context, cobj, groups=["body", "AV_Boundary", "MV_Boundary"], cuts=1)
-    #blender_gmsh_remesh.main()
-    #make_custom_group(context, cobj, ['AV','MV'], name="body")
-    #reset_values(context)
-    #translate_mesh(context,cobj,shift=[0,0,1],group=None)
-    # --- Shift and shrinkwrap only the lower edge loop --- #
-    """ll_x_shift = get_min_max_x(target,0)[1] + get_min_max_x(target,0)[0] - get_min_max_x(source_copy,0)[1] - get_min_max_x(source_copy,0)[0]
-    ll_y_shift = get_min_max_y(target,0)[1] + get_min_max_y(target,0)[0] - get_min_max_y(source_copy,0)[1] - get_min_max_y(source_copy,0)[0]
-    ll_z_shift = get_min_max_z(target,0)[1] + get_min_max_z(target,0)[0] - get_min_max_z(source_copy,0)[1] - get_min_max_z(source_copy,0)[0]
-    
-    lower_loop_shift = [0.5 * ll_x_shift, 0.5* ll_y_shift, 0.5 * ll_z_shift] # Calcs the difference between the lowest points between source and target
-    cons_print(lower_loop_shift)
-    translate_mesh_object(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', return_to_object=True)"""
-    extract_vertex_group_object(cobj, "lower_basal_edge_loop", "tempres")
+    gradual_mesh_translate_test(cobj, (0,0,-1), group='lower_basal_edge_loop')
     return True
 
 def compareMeshes(mesh1, mesh2, group=None):
