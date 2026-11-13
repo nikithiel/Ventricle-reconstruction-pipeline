@@ -171,8 +171,12 @@ def smooth_vertex_group(obj ,group, factor=0.5, iter=5, use_laplacian=False):
         modifier.use_volume_preserve = True
         bpy.ops.object.modifier_apply(modifier='laplacian smooth')
     else:
-        for i in range(iter): # Here apply iterative smoothing for better results
-            bpy.ops.mesh.vertices_smooth(factor=factor, repeat=iter+1-i)
+        bpy.ops.object.mode_set(mode='OBJECT')  
+        modifier = obj.modifiers.new(name="smoothing", type='SMOOTH')
+        modifier.iterations = iter 
+        modifier.factor = factor
+        modifier.vertex_group = group
+        bpy.ops.object.modifier_apply(modifier='smoothing')
     bpy.ops.object.mode_set(mode='OBJECT')
 
 def get_value(self):
@@ -329,19 +333,31 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
                           exclude_groups=["AV_deep","MV_deep"],
                           name="body_more")     
     
-    cur_name = selected_names[0] # Sets first object as reference
-    for i in range(1,len(selected_names)):
-        source = bpy.data.objects.get(cur_name)
+    ref_id = 5
+    cur_name = selected_names[ref_id] # Sets first object as reference
+    for i in range(0,len(selected_names)):
+        if i == ref_id:
+            continue
+        #source = bpy.data.objects.get(cur_name) # For iterative going from 0,1,2,3,4
+        source = bpy.data.objects.get(selected_names[ref_id]) # Always set frame 0 as the reference
         source_copy = copy_object(source.name, source.name + '_COPY')
         target = bpy.data.objects.get(selected_names[i])
         # --- Shift and shrinkwrap the body part --- #
-        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[i-1]
-        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[i-1]
+        shift_aortic = pos_matrix_aortic[i] - pos_matrix_aortic[ref_id]
+        shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[ref_id]
         
-        translate_mesh_object(context, source_copy, shift = (0,0,0), group=None, return_to_object=False)
-        translate_mesh_object(context, source_copy, shift = 0.5 * (shift_mitral + shift_aortic), group=None, return_to_object=False)
-        translate_mesh_object(context, source_copy, shift = 0.5 * (shift_mitral - shift_aortic), group="MV", return_to_object=False)
-        translate_mesh_object(context, source_copy, shift= 0.5 * (-shift_mitral + shift_aortic), group="AV", return_to_object = False) # reverse
+        translate_mesh_object(context, source_copy, shift= (0,0,0), group=None, return_to_object=False)
+        translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral + shift_aortic), group=None, return_to_object=False)
+        translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral - shift_aortic), group="MV", return_to_object=False)
+        translate_mesh_object(context, source_copy, shift= 0.5 * (-shift_mitral + shift_aortic), group="AV", return_to_object = False)
+        
+        #gradual_mesh_translate(source_copy, shift = 0.5 * (shift_mitral - shift_aortic), group="MV", max_dist = 3) # Experimental
+        #gradual_mesh_translate(source_copy, shift = 0.5 * (-shift_mitral + shift_aortic), group="AV", max_dist = 3) # Experimental
+        
+        # --- Here separate copy of the body and then shrinkwrap to it
+        temp_target = extract_vertex_group_object(target, "body", target.name + "_body")
+        shift_shrinkwrap_topology(context, source_copy, temp_target, shift=None, shrinkwrap='NEAREST_SURFACEPOINT', group='body') # Shifts and then shrinkwraps body of the basal region
+        bpy.data.objects.remove(temp_target, do_unlink=True)
         
         # --- Shift and shrinkwrap only the lower edge loop --- #
         ll_x_shift = get_min_max_x(target,0)[1] + get_min_max_x(target,0)[0] - get_min_max_x(source_copy,0)[1] - get_min_max_x(source_copy,0)[0]
@@ -349,31 +365,25 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         ll_z_shift = get_min_max_z(target,0)[1] + get_min_max_z(target,0)[0] - get_min_max_z(source_copy,0)[1] - get_min_max_z(source_copy,0)[0]
         
         lower_loop_shift = [0.5 * ll_x_shift, 0.5* ll_y_shift, 0.5 * ll_z_shift] # Calcs the difference between the lowest points between source and target
+        translate_mesh_object(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', return_to_object=False)
+        #gradual_mesh_translate(source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', max_dist = 2)
         
-        translate_mesh_object(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', return_to_object=True)
-
         ### --- After position is moved to overlap as much as possible, the morphing is performed --- ###
         # --- Here separate a copy of the lower basal edge loop and then shrinkwrap to it
         temp_target = extract_vertex_group_object(target, "lower_basal_edge_loop", target.name + "_lower_basal_edge_loop")
-        shift_shrinkwrap_topology(context, source_copy, temp_target, shift= None, shrinkwrap='NEAREST_VERTEX', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
+        shift_shrinkwrap_topology(context, source_copy, temp_target, shift=None, shrinkwrap='NEAREST_VERTEX', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
         bpy.data.objects.remove(temp_target, do_unlink=True)
         
-        # --- Here separate copy of the body and then shrinkwrap to it
-        temp_target = extract_vertex_group_object(target, "body_more", target.name + "_body_more")
-        shift_shrinkwrap_topology(context, source_copy, temp_target, shift=None, shrinkwrap='NEAREST_SURFACEPOINT', group='body_more') # Shifts and then shrinkwraps body of the basal region
-        bpy.data.objects.remove(temp_target, do_unlink=True)
+        # Experimental shift
+        """cons_print(lower_loop_shift)
+        neg_lower_loop_shift = [-1 * i for i in lower_loop_shift]
+        translate_mesh_object(context, source_copy, shift=neg_lower_loop_shift, group='lower_basal_edge_loop', return_to_object=False)
+        gradual_mesh_translate(source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', max_dist = 4)"""
         
-        # Prep for next iter
+        # Prep for next iter    
         cur_name = selected_names[i] # Now the current target becomes the reference for the next iter
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
         source_copy.name = cur_name # Rename shrinkwrapped object to the current
-    
-    # --- Retroactive smoothing to avoid cascading recurring smoothing (WIP) --- #
-    for name in selected_names: # All the resulting objects post transformation should still have the same name
-        obj = bpy.data.objects.get(name)
-        """if name=='ventricle_0_basal': 
-            make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')"""
-        smooth_vertex_group(obj,"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=True)
  
 def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body', use_axis=[0,0,0]):
     """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
@@ -403,87 +413,46 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
         modifier.use_project_z = use_axis[2]
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
-def RBF_morph(context, source, target): # WIP
-    # Extract source vertices
-    source_vertices = np.array([
-        source.matrix_world @ v.co
-        for v in source.data.vertices
-    ])
+def gradual_mesh_translate(obj, shift, group, max_dist=5):
+    # WARNING: This translation causes deformations in the surrounding vertices
+    # The influence determines the distance of which vertices would still be affected
+    bpy.context.view_layer.objects.active = obj
     
-    # Create RBF
-    rbf = RBF(
-        original_control_points=source_controls,
-        deformed_control_points=target_controls,
-        func="thin_plate_spline"
-    )
-    
-    # Calculate deformation for every source vertex
-    new_vertices = rbf(source_vertices)
-
-    # Update Blender mesh
-    inverse = source.matrix_world.inverted()
-
-    for i, vertex in enumerate(source.data.vertices):
-        vertex.co = inverse @ new_vertices[i]
-
-    source.data.update()
-
-def gradual_mesh_translate(obj, shift, group):
-    return None
-
-def gradual_mesh_translate_test(obj, shift, group):
-    obj = bpy.context.object
-
-    # Vertex group containing the open boundary loop
-    boundary_group = obj.vertex_groups[group]
-
-    # Parameters
-    displacement = Vector(shift)
-    influence_distance = 5.0
-
-    # Get mesh
+    selected_group = obj.vertex_groups[group]
+    shift = Vector(shift) # Cast into vector
     mesh = obj.data
-
-    # Store original coordinates
-    original_positions = [v.co.copy() for v in mesh.vertices]
-
-    # Get boundary vertices
-    boundary_vertices = []
-
+    og_positions = [v.co.copy() for v in mesh.vertices] # Copy and store all the original positions of all vertices
+    
+    # Get the vertices belonging to that vertex group
+    selected_vertice_indices = []
     for vertex in mesh.vertices:
         try:
-            weight = boundary_group.weight(vertex.index)
+            weight = selected_group.weight(vertex.index)
             if weight > 0.0:
-                boundary_vertices.append(vertex.index)
+                selected_vertice_indices.append(vertex.index)
         except RuntimeError:
             pass
-
-    # Calculate distance from each vertex to the boundary
+    
+    # Perform the gradual translation. The further a vertex is from the vertices in the selected group, the less proportional translation it will have
     for vertex in mesh.vertices:
-
-        min_distance = float("inf")
-
-        for boundary_index in boundary_vertices:
+        min_dist = float("inf")
+        # Calculates the minimal distance between any given vertex with any grouped vertex
+        for sel_ind in selected_vertice_indices:
             distance = (
-                original_positions[vertex.index]
-                - original_positions[boundary_index]
+                og_positions[vertex.index]
+                - og_positions[sel_ind]
             ).length
 
-            min_distance = min(min_distance, distance)
+            if sel_ind == vertex.index:
+                min_dist = 0
+            else:
+                min_dist = min(min_dist, distance)
 
-        # Calculate influence
-        t = min(min_distance / influence_distance, 1.0)
-
-        # Smooth falloff
-        weight = 1.0 - (t * t * (3.0 - 2.0 * t))
-
-        # Apply displacement
-        vertex.co = (
-            original_positions[vertex.index]
-            + displacement * weight
-        )
-
-    mesh.update()
+        t = min(min_dist / max_dist, 1.00) # Either the vertices are still within the max distance or it's set to 1
+        influence = 1.00 - (t * t * (3.00 - 2.00 * t)) # Smooth falloff with cubic smoothstep
+        vertex.co += shift * influence
+            
+    mesh.update() # Mesh update needs to be finalized in order for it to actually take effect
     
 def make_custom_group(context, obj, exclude_groups, name='body'):
     """
@@ -567,6 +536,26 @@ def extract_vertex_group_object(obj, group, new_name):
     new_obj.matrix_world = obj.matrix_world.copy()
 
     return new_obj
+
+def RBF_group_morph(source, target, group, kernel, radius, epsilon, tol): #WIP
+    source_group = source.vertex_groups['group']
+    target_group = target.vertex_groups['group']
+    
+    # Initialize RBF
+    rbf = RBF(
+        original_control_points=source_group,
+        deformed_control_points=target_group,
+        radius=radius,
+        func=kernel,
+        eps=epsilon,
+        tol=tol
+    )
+    
+    # Apply deformation to source subgroup
+    morphed_group = rbf(source_group)
+
+    return morphed_group
+
 # UI-interface functions.
 class MESH_OT_get_node(bpy.types.Operator):
     """Get node position coordinates and save coordinates in UI"""
@@ -1415,12 +1404,18 @@ class MESH_OT_create_basal(bpy.types.Operator):
         # Subdivide the first object before morphing
         obj = bpy.data.objects.get(selected_names[0])
         
+        cons_print(context.scene.use_basal_smoothing)
+        
         # Performs the gradual remeshing
         gradual_remesh(context,obj)
-        obj = bpy.data.objects.get(selected_names[0]) # Reassign object as it was replaced during remesh, even if not it will not matter
+        for i in range(0,len(selected_names)):
+            obj = bpy.data.objects.get(selected_names[i]) # Reassign object as it was replaced during remesh, even if not it will not matter
         make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
         # Here the issue is that the vertex group for lower edge increases after subdivision
         shift_shrinkwrap_topology_batch(context, pos_matrices, selected_names)
+        if context.scene.use_basal_smoothing:
+            for i in range(0, len(selected_names)):
+                smooth_vertex_group(bpy.data.objects.get(selected_names[i]),"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=False)
         return{'FINISHED'} 
 
 def mesh_create_basal_batch(context):
@@ -1823,7 +1818,6 @@ def mesh_connect_apical_and_basal_pairs(context):
         bpy.ops.mesh.delete(type='ONLY_FACE') 
         bpy.ops.object.mode_set(mode='OBJECT')
 
-        #cons_print(new_triangulate_edge_indices)
         triangulate_connection(False, apical_obj, new_triangulate_edge_indices)
 
         # Add faces onto triangulation.
@@ -1834,7 +1828,7 @@ def mesh_connect_apical_and_basal_pairs(context):
 
         # Perform partial smoothing from above
         smoothing_iter_factor = compute_smoothing_iteration_factor_connection(context, int(name[-7:-6]), volumelist)
-        smooth_connection_and_basal_region(context, apical_obj, smoothing_iter_factor)
+        smooth_connection_and_basal_region(context, apical_obj, smoothing_iter_factor) # Hier ist wo alles plötzlich gefixt ist
         finished_name.append(name[:-6])
     return True, finished_name
 
@@ -2667,8 +2661,12 @@ def test_function(context):
     view_layer = context.view_layer
     selected_objects = context.selected_objects
     cobj = selected_objects[0]
+    smooth_vertex_group(cobj ,"body", factor=1, iter=3, use_laplacian=False)
+    #gradual_remesh(context,cobj)
     #cobj2 = selected_objects[1]
-    gradual_mesh_translate_test(cobj, (0,0,-1), group='lower_basal_edge_loop')
+    #gradual_mesh_translate(cobj, (0,0,-1), group='lower_basal_edge_loop')
+    #translate_mesh_object(context, cobj, (1,1,1), group = 'lower_basal_edge_loop')
+    #gradual_mesh_translate(cobj, (-1    ,-1,-1), group='lower_basal_edge_loop', max_dist=5)
     return True
 
 def compareMeshes(mesh1, mesh2, group=None):
@@ -2874,6 +2872,9 @@ class PANEL_Setup_Variables(bpy.types.Panel):
         layout.prop(context.scene, "final_sm_iter", text="Volume preserving smoothing iterations")
         row = layout.row()
         row.label(text= "Basal Smoothing Variables")
+        row = layout.row()
+        row.prop(context.scene, 'use_basal_smoothing', text="Applies smoothing for basal (NOT VOLUME PRESERVING)")
+        row = layout.row() 
         layout.prop(context.scene, "basal_sm_factor", text="Basal region smoothing factor")
         row = layout.row()
         layout.prop(context.scene, "basal_sm_iter", text="Basal region smoothing iterations")
@@ -3973,6 +3974,7 @@ scene_properties = {
     "con_fade_percentage": bpy.props.FloatProperty(name="Share of the apical height over which the smoothing of the connection fades out below the cut", default=20.0, min=0.1, max=100.0, subtype='PERCENTAGE'),
     "final_sm_iter": bpy.props.IntProperty(name="Volume preserving smoothing iterations applied to the whole ventricle except the valves", default=10, min=0),
     # Smoothing iter
+    "use_basal_smoothing" : bpy.props.BoolProperty(name="Use basal region smoothing", default=False),
     "basal_sm_factor" : bpy.props.FloatProperty(name="Basal Region Smoothing Factor", default=0.5),
     "basal_sm_iter" : bpy.props.IntProperty(name="Basal Region Smoothing Iterations", default=5),
     # Import variables.
