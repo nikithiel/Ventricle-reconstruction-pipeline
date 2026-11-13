@@ -185,43 +185,6 @@ def get_value(self):
 def set_value(self,value):
     self["ventricle_import_dir"] = value
 
-def translate_mesh(context, obj, shift, group=None, return_to_object=True):
-    """Translates a mesh, if a group is given, then only translates the vertices of that mesh that belongs to that group"""
-    bpy.context.view_layer.objects.active = obj
-    if group is not None: # A vertex group is specified, we only shift vertices in this group. The group has to be inputted as string
-        if obj.mode != "EDIT": bpy.ops.object.mode_set(mode="EDIT")
-        bpy.ops.mesh.select_all( action = 'DESELECT' )
-        bpy.ops.object.vertex_group_set_active(group=group)
-        bpy.ops.object.vertex_group_select()
-        bm = bmesh.from_edit_mesh(obj.data)
-        edbm = True
-        for v in bm.verts:
-            if v.select:
-                for i in range(len(v.co)):
-                    v.co[i] += shift[i]
-        bmesh.update_edit_mesh(obj.data)
-        if return_to_object: bpy.ops.object.mode_set(mode="OBJECT")
-        return True
-
-    # Everything else
-    else:
-        if obj.mode == "EDIT": bpy.ops.object.mode_set(mode="OBJECT")
-        bm = bmesh.new()
-        bm.from_mesh(obj.data)
-        edbm = False
-        if not edbm:
-            for v in bm.verts:
-                for i in range(len(v.co)):
-                    v.co[i] += shift[i]
-    if not edbm:
-        bm.to_mesh(obj.data)
-        bm.free()
-        obj.data.update()
-    else:
-        bmesh.update_edit_mesh(obj.data)
-    if return_to_object: bpy.ops.object.mode_set(mode="OBJECT")
-    return True
-
 def translate_mesh_object(context, obj, shift, group=None, return_to_object=None):
     bpy.context.view_layer.objects.active = obj
     if group is not None:
@@ -351,9 +314,6 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral - shift_aortic), group="MV", return_to_object=False)
         translate_mesh_object(context, source_copy, shift= 0.5 * (-shift_mitral + shift_aortic), group="AV", return_to_object = False)
         
-        #gradual_mesh_translate(source_copy, shift = 0.5 * (shift_mitral - shift_aortic), group="MV", max_dist = 3) # Experimental
-        #gradual_mesh_translate(source_copy, shift = 0.5 * (-shift_mitral + shift_aortic), group="AV", max_dist = 3) # Experimental
-        
         # --- Here separate copy of the body and then shrinkwrap to it
         temp_target = extract_vertex_group_object(target, "body", target.name + "_body")
         shift_shrinkwrap_topology(context, source_copy, temp_target, shift=None, shrinkwrap='NEAREST_SURFACEPOINT', group='body') # Shifts and then shrinkwraps body of the basal region
@@ -374,12 +334,6 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         shift_shrinkwrap_topology(context, source_copy, temp_target, shift=None, shrinkwrap='NEAREST_VERTEX', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
         bpy.data.objects.remove(temp_target, do_unlink=True)
         
-        # Experimental shift
-        """cons_print(lower_loop_shift)
-        neg_lower_loop_shift = [-1 * i for i in lower_loop_shift]
-        translate_mesh_object(context, source_copy, shift=neg_lower_loop_shift, group='lower_basal_edge_loop', return_to_object=False)
-        gradual_mesh_translate(source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', max_dist = 4)"""
-        
         # Prep for next iter    
         cur_name = selected_names[i] # Now the current target becomes the reference for the next iter
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
@@ -392,7 +346,7 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
 
     # Shift the source to overlay one of the valves before shrinkwrapping
     if shift is not None:
-        translate_mesh(context, source, shift, group=None)
+        translate_mesh_object(context, source, shift, group=None)
     
     bpy.context.view_layer.objects.active = source
     if group=='body': # Only basal region
@@ -833,12 +787,6 @@ def remove_multiple_basal_region(context):
         reference_name = find_reference_ventricle_mean(selected_objects)
     else:
         reference_name = find_reference_ventricle_max(selected_objects)
-
-    """cons_print(f"Object is read-only: {context.scene.reference_object_name}")
-    cons_print(f"Object trying to be asigned: {reference_name}")"""
-    """print("Scene type:", type(context.scene))
-    print("Property exists:", hasattr(context.scene, "reference_object_name"))
-    print("Property value:", getattr(context.scene, "reference_object_name", "<missing>"))"""
     context.scene.reference_object_name = reference_name
     reference_copy = copy_object(reference_name, 'reference')
     cons_print(f"Chosen reference object: {context.scene.reference_object_name}")
@@ -1403,8 +1351,6 @@ class MESH_OT_create_basal(bpy.types.Operator):
         selected_names = sorted(selected_names, key=get_frame_number)
         # Subdivide the first object before morphing
         obj = bpy.data.objects.get(selected_names[0])
-        
-        cons_print(context.scene.use_basal_smoothing)
         
         # Performs the gradual remeshing
         gradual_remesh(context,obj)
