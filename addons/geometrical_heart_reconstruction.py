@@ -2229,10 +2229,9 @@ class PANEL_Valves(bpy.types.Panel):
         row.prop(context.scene, 'mitral_depth', text="MV depth (mm)")
         row = layout.row()
         ratio = context.scene.mitral_width / context.scene.mitral_depth
-        if ratio_in_band(ratio): row.label(text=f"width/depth = {ratio:.2f}")
-        else: row.label(text=f"width/depth = {ratio:.2f}, outside {BAND_TEXT}", icon='ERROR')
-        row = layout.row()
-        row.prop(context.scene, 'valve_R_target', text="R_target (width/depth for Calculate Radii)")
+        text = f"width/depth = {ratio:.2f} (R_target {context.scene.valve_R_target:.2f})"
+        if ratio_in_band(ratio): row.label(text=text)
+        else: row.label(text=f"{text}, outside {BAND_TEXT}", icon='ERROR')
         row = layout.row()
         row.label(text= "Aortic valve", icon = 'MESH_CIRCLE')   
         row = layout.row()
@@ -2249,6 +2248,8 @@ class PANEL_Valves(bpy.types.Panel):
             # Calculate Valve Radii
             row = layout.row()
             row.operator('heart.calculate_valve_diameter', text = "Calculate Radii", icon = "MESH_CIRCLE")
+            row = layout.row()
+            row.prop(context.scene, 'valve_R_target', text="R_target")
             row = layout.row()
             layout.operator('heart.build_valve',  text= "Add valve interface nodes", icon = 'PROP_OFF')
             row = layout.row()
