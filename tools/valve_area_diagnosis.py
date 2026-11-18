@@ -14,7 +14,7 @@ What it does
   4. --t-cfd SECONDS: adds the cycle-duration factor T_Doppler / T_CFD (T_Doppler = 60/bpm).
 
 Only the Python standard library is needed. The area arithmetic and the comparison are the
-same code the Blender add-on uses (addons/valve_geometry_check.py).
+same code the Blender add-on uses (addons/valve_geometry.py).
 
 Examples (from the repository root)
   python tools/valve_area_diagnosis.py
@@ -36,7 +36,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "addons"))
-import valve_geometry_check as vgc  # noqa: E402  (bpy-free core)
+import valve_geometry as vgc  # noqa: E402  (bpy-free core)
 
 TEMPLATE_RE = re.compile(r"^A([345])_(MV|AV)_(Boundary|Surface|perm|res|imperm)$")
 
@@ -234,24 +234,18 @@ def load_templates(blend: BlendFile) -> Dict[Tuple[int, str], TemplateSet]:
             found.setdefault((int(m.group(1)), m.group(2)), {})[m.group(3)] = name
     out: Dict[Tuple[int, str], TemplateSet] = {}
     for (approach, valve), parts in sorted(found.items()):
-        shape = None
+        boundary = surface = None
         if "Boundary" in parts:
-            verts, faces, edges = blend.mesh(parts["Boundary"])
-            try:
-                shape = vgc.shape_from_loop(verts, edges)
-                ring_source = f"{parts['Boundary']} (edge loop)"
-                ring_xy = [(verts[i][0], verts[i][1]) for i in vgc.order_edge_loop(edges)]
-            except ValueError:
-                pass
-        if shape is None and "Surface" in parts:
-            verts, faces, _ = blend.mesh(parts["Surface"])
-            shape = vgc.shape_from_faces(verts, faces)
-            ring_source = f"{parts['Surface']} (faces)"
-            ring_xy = [(v[0], v[1]) for v in verts]
-        if shape is None:
+            verts, _, edges = blend.mesh(parts["Boundary"])
+            boundary = (verts, edges)
+        if "Surface" in parts:
+            surface = blend.mesh(parts["Surface"])[:2]
+        outline = vgc.template_outline(boundary, surface)
+        if outline is None:
             continue
-        xs = [q[0] for q in ring_xy]
-        ys = [q[1] for q in ring_xy]
+        shape, pts, used = outline
+        ring_source = f"{parts[used]} ({'edge loop' if used == 'Boundary' else 'faces'})"
+        ring_xy = [(q[0], q[1]) for q in pts]
         zone_areas: Dict[str, float] = {}
         zone_tris: Dict[str, list] = {}
         for z in vgc.ZONE_TYPES + ("imperm",):
@@ -262,7 +256,7 @@ def load_templates(blend: BlendFile) -> Dict[Tuple[int, str], TemplateSet]:
                 zone_tris.setdefault(key, []).extend(_bottom_triangles(verts, faces))
         areas = vgc.TemplateAreas(shape.area, zone_areas.get("perm"), zone_areas.get("res"))
         out[(approach, valve)] = TemplateSet(approach, valve, shape, areas, ring_source,
-                                             (min(xs), max(xs), min(ys), max(ys)), ring_xy, zone_tris,
+                                             vgc.xy_extent(ring_xy), ring_xy, zone_tris,
                                              "imperm" in parts)
     return out
 
@@ -474,19 +468,19 @@ def report_summary(summary_path: Path, session: Optional[dict], templates, measu
     shapes = {v: ts.shape for v, ts in sets.items()}
     if session:
         (sx, sy), (s_av, _) = session["MV"]["stretch"], session["AV"]["stretch"]
-        width, depth, diameter = sx * shapes["MV"].width, sy * shapes["MV"].depth, 2 * s_av
+        panel = vgc.ValveSizes(sx * shapes["MV"].width, sy * shapes["MV"].depth, 2 * s_av)
         sizes_source = "session log"
     elif not summary.old_format:
-        width, depth, diameter = summary.width_MV_mm, summary.depth_MV_mm, summary.d_AV_mm
+        panel = summary.sizes_mm
         sizes_source = "summary.csv (no session log given)"
     else:
         print("The summary.csv has the old format (no sizes) and no session log is given: nothing to compare.")
         return
     print(f"A_fit: MV {summary.A_MV_mm2:.2f} mm2, AV {summary.A_AV_mm2:.2f} mm2; bpm_mv {summary.bpm_mv}, "
           f"bpm_av {summary.bpm_av}; format {'old' if summary.old_format else 'new'}")
-    print(f"Sizes used for the geometry ({sizes_source}): MV width {width:.3f} mm, depth {depth:.3f} mm, "
-          f"AV diameter {diameter:.3f} mm")
-    exp, notes = vgc.expected_areas(summary, width, depth, diameter, shapes, approach)
+    print(f"Sizes used for the geometry ({sizes_source}): MV width {panel.width_MV:.3f} mm, "
+          f"depth {panel.depth_MV:.3f} mm, AV diameter {panel.d_AV:.3f} mm")
+    exp, notes = vgc.expected_areas(summary, panel, shapes, approach)
     meas = {}
     for v in vgc.VALVES:
         m = vgc.Measurement(v)
@@ -499,7 +493,7 @@ def report_summary(summary_path: Path, session: Optional[dict], templates, measu
         else:
             m.ring_mm2 = exp[v].panel_mm2
             if v == "MV":
-                m.width_mm, m.depth_mm = width, depth
+                m.width_mm, m.depth_mm = panel.width_MV, panel.depth_MV
             src = "ring predicted from the template"
         a = sets[v].areas if sets[v] else None
         if a is not None and a.open:
@@ -517,9 +511,9 @@ def report_summary(summary_path: Path, session: Optional[dict], templates, measu
             continue
         fac = r.size_factor
         if r.valve == "MV":
-            print(f"    -> MV sizes that give the target: width {width * fac:.3f} mm, depth {depth * fac:.3f} mm")
+            print(f"    -> MV sizes that give the target: width {panel.width_MV * fac:.3f} mm, depth {panel.depth_MV * fac:.3f} mm")
         else:
-            print(f"    -> AV diameter that gives the target: {diameter * fac:.3f} mm")
+            print(f"    -> AV diameter that gives the target: {panel.d_AV * fac:.3f} mm")
         if t_cfd:
             bpm = summary.bpm_mv if r.valve == "MV" else summary.bpm_av
             if bpm:

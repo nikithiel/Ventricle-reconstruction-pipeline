@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import trimesh
 
-from valve_geometry_check import TemplateShape, av_diameter, mv_size
+from valve_geometry import TemplateShape, ValveSizes, av_diameter, mv_size
 
 
 # -----------------------------
@@ -861,10 +861,10 @@ def validate_valve_inputs(root) -> Tuple[Path, Path]:
 
 
 def process_case(case_dir: Path, n_phase: int = 400, stl_dir: Optional[Path] = None, *,
-                 R_target: float, mv_shape: TemplateShape, av_shape: TemplateShape) -> CaseData:
+                 R_target: float, shapes: Dict[str, TemplateShape]) -> CaseData:
     # case_dir -> holds inputPython.txt, the AV/MV CSVs, and receives the outputs
     # stl_dir  -> holds the mesh frames; defaults to case_dir (flat layout)
-    # R_target, mv_shape, av_shape -> turn the fitted areas into MV width/depth and AV diameter
+    # R_target and the template shapes ('MV', 'AV') -> turn the fitted areas into MV width/depth and AV diameter
     if stl_dir is None:
         stl_dir = case_dir
 
@@ -948,7 +948,7 @@ def process_case(case_dir: Path, n_phase: int = 400, stl_dir: Optional[Path] = N
         fit["A_MV"] = A_mv
         fit["mv_fit_curve"] = (A_mv * best_mv["v_cycle"]).tolist()
         fit["t_start_MV"] = best_mv["t_start"]
-        fit["width_MV"], fit["depth_MV"] = mv_size(abs(A_mv), mv_shape, R_target)
+        fit["width_MV"], fit["depth_MV"] = mv_size(abs(A_mv), shapes["MV"], R_target)
         fit["rmse_MV"] = best_mv["rmse"]
 
         mv_fit_curve = A_mv * best_mv["v_cycle"]
@@ -984,7 +984,7 @@ def process_case(case_dir: Path, n_phase: int = 400, stl_dir: Optional[Path] = N
         A_av = best_av["A"]
         fit["A_AV"] = A_av
         fit["t_start_AV"] = best_av["t_start"]
-        fit["d_AV"] = av_diameter(abs(A_av), av_shape)
+        fit["d_AV"] = av_diameter(abs(A_av), shapes["AV"])
         fit["rmse_AV"] = best_av["rmse"]
 
         fit["av_fit_curve_target_minus_dVdt"] = (A_av * best_av["v_cycle"]).tolist()
@@ -1094,24 +1094,21 @@ def cases_to_jsonable(cases: Dict[str, CaseData]) -> Dict[str, object]:
     return out
 
 @dataclass
-class ValveSizes:
-    """Result of Calculate Radii in SI units (m^2, m). Areas are positive magnitudes."""
+class FitResult:
+    """Result of Calculate Radii in SI units: positive areas A_fit (m^2) and the sizes (m)."""
     A_MV: float
     A_AV: float
-    width_MV: float
-    depth_MV: float
-    d_AV: float
+    sizes: ValveSizes
 
 
-def main_calc_diameter(root, n_phase, approach: int, R_target: float,
-                       mv_shape: TemplateShape, av_shape: TemplateShape):
+def main_calc_diameter(root, n_phase, approach: int, R_target: float, shapes: Dict[str, TemplateShape]):
     # `root` is the folder you point Blender at -- the one holding the mesh
     # frames (your '/STL/' export). inputPython.txt and the AV/MV CSVs may sit
     # there or one level up; resolve_case_dir figures out which. All outputs go
     # under the resolved case folder.
     #
     # approach, R_target and the template shapes (measured in the .blend by
-    # valve_geometry_check.template_shapes) turn the fitted areas into the sizes the
+    # valve_geometry.template_shapes) turn the fitted areas into the sizes the
     # build needs: MV width/depth with width/depth = R_target, and the AV diameter.
     #
     # Validate first: a missing CSV or bpm key would otherwise skip a fit block
@@ -1124,7 +1121,7 @@ def main_calc_diameter(root, n_phase, approach: int, R_target: float,
     figs = []
 
     case, _ = process_case(case_dir, n_phase=n_phase, stl_dir=stl_dir,
-                           R_target=R_target, mv_shape=mv_shape, av_shape=av_shape)
+                           R_target=R_target, shapes=shapes)
     #figs.append(fig)
 
     # The fits solve A*v ~ +dV/dt (MV) and A*v ~ -dV/dt (AV). With Doppler velocities towards
@@ -1137,8 +1134,8 @@ def main_calc_diameter(root, n_phase, approach: int, R_target: float,
     if a_av > 0:
         warnings.warn("The AV fit area has an unexpected sign (positive): the AV Doppler CSV probably uses the "
                       "opposite direction convention (towards the probe = positive). Its magnitude is used.")
-    sizes = ValveSizes(A_MV=abs(a_mv), A_AV=abs(a_av), width_MV=case.fit.get("width_MV", np.nan),
-                       depth_MV=case.fit.get("depth_MV", np.nan), d_AV=case.fit.get("d_AV", np.nan))
+    sizes = ValveSizes(*(case.fit.get(k, np.nan) for k in ("width_MV", "depth_MV", "d_AV")))
+    result = FitResult(A_MV=abs(a_mv), A_AV=abs(a_av), sizes=sizes)
 
     # Safety net: the inputs were fine, so a non-finite size means the fit itself
     # degenerated (fit_scaling_signed returns nan on a vanishing scale).
@@ -1160,12 +1157,12 @@ def main_calc_diameter(root, n_phase, approach: int, R_target: float,
         "bpm_mv [1/min]": case.bpm_mv,
         "bpm_av [1/min]": case.bpm_av,
         "approach": int(approach),
-        "A_MV [m^2]": sizes.A_MV,
-        "A_AV [m^2]": sizes.A_AV,
+        "A_MV [m^2]": result.A_MV,
+        "A_AV [m^2]": result.A_AV,
         "R_target [-]": float(R_target),
         "width_MV [m]": sizes.width_MV,
         "depth_MV [m]": sizes.depth_MV,
         "d_AV [m]": sizes.d_AV,
     }]).to_csv(out_dir / "summary.csv", index=False)
 
-    return figs, sizes
+    return figs, result

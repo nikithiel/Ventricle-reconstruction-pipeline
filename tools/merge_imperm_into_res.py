@@ -1,12 +1,12 @@
 """Merge the imperm zone templates of GVR-Pipeline.blend into the res templates (one-off).
 
-Decision: .private/docs/adr/0001-imperm-geht-in-res-auf.md. imperm is the outer band of a valve disc
-and is now part of res, so a built valve has the zones perm and res only.
+imperm is the outer band of a valve disc. It is now flowed through like res and therefore part of res,
+so a built valve has the zones perm and res only.
 
 Run once in Blender 3.1: Scripting workspace > Text > Open this file > Run Script. The report goes to
 the System Console (Window > Toggle System Console). Nothing is changed unless every template pair
 passes its checks. Save the file afterwards (Ctrl+S). Running it a second time does nothing.
-Guide: reports/anleitung_imperm_in_res_mergen.md
+See README, section 'Merge imperm into res'.
 """
 import bpy
 import bmesh
@@ -25,12 +25,18 @@ def is_wall(face):
     return abs(face.normal.z) < 0.5
 
 
+def is_flat(bm):
+    """A3 zones are flat discs, the A4/A5 zones closed prisms."""
+    z = [v.co.z for v in bm.verts]
+    return max(z) - min(z) < 1e-3
+
+
 def bottom_area(bm):
-    """Top-view area of a zone, same rule as valve_geometry_check.bottom_faces_area."""
+    """Top-view area of a zone, same rule as valve_geometry.bottom_faces_area."""
+    if is_flat(bm):
+        return sum(f.calc_area() for f in bm.faces)
     z = [v.co.z for v in bm.verts]
     lo, hi = min(z), max(z)
-    if hi - lo < 1e-3:  # flat zone (A3)
-        return sum(f.calc_area() for f in bm.faces)
     limit = lo + 0.25 * (hi - lo)
     return sum(f.calc_area() for f in bm.faces if all(v.co.z <= limit for v in f.verts))
 
@@ -83,6 +89,8 @@ def merged_mesh(res, imperm):
         problems.append(f"{info['welded']} vertices joined, expected {expected_welds}")
     if any(len(e.link_faces) > 2 for e in bm.edges):
         problems.append("edges with more than two faces (interior faces left)")
+    if not is_flat(bm) and any(len(e.link_faces) == 1 for e in bm.edges):
+        problems.append("the zone is not closed (edges with only one face)")
     if any(not e.link_faces for e in bm.edges) or any(not v.link_faces for v in bm.verts):
         problems.append("loose edges or vertices")
     if any(len(e.link_faces) == 2 and not e.is_contiguous for e in bm.edges):
@@ -97,6 +105,8 @@ def merged_mesh(res, imperm):
 
 def main():
     print("\n=== Merge imperm into res ===")
+    if bpy.context.mode != 'OBJECT':  # bmesh cannot write a mesh that is in Edit Mode
+        raise RuntimeError("Switch to Object Mode first (Tab). Nothing was changed.")
     todo, problems = [], []
     for a in APPROACHES:
         for v in VALVES:

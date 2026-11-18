@@ -125,7 +125,7 @@ def resolve_session_log_path(scene, stamp):
 def _build_valves_section(scene):
     """Valve sizes from the panel plus the stretch factors and zone thickness the build derives from them."""
     try:
-        from valve_geometry_check import av_stretch, mv_stretch, template_shapes
+        from valve_geometry import av_stretch, mv_stretch, template_shapes
         mv_s = mv_stretch(scene.mitral_width, scene.mitral_depth, template_shapes(bpy, scene.approach)["MV"])
         av_s = av_stretch(scene.aortic_diameter)
     except Exception:  # e.g. imperm templates left in the .blend: log the sizes anyway
@@ -137,7 +137,7 @@ def _build_valves_section(scene):
         return {"stretch_factors": _v(stretch), "zone_thickness_mm": _f(0.1 * stretch[2])}  # A4 zones: height 0.1 at unit scale
 
     return {
-        "ratio_target": _f(scene.valve_ratio_target),
+        "R_target": _f(scene.valve_R_target),
         "mitral": {
             "translation_mm": _v(scene.translation_mitral),
             "angle_deg": _v(scene.angle_mitral),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for addons/valve_geometry_check.py, runnable without Blender (standard library only).
+"""Tests for addons/valve_geometry.py, runnable without Blender (standard library only).
 
   python tools/test_valve_area_check.py
 
@@ -24,11 +24,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "addons"))
 sys.path.insert(0, str(REPO / "tools"))
-import valve_geometry_check as vgc  # noqa: E402
+import valve_geometry as vgc  # noqa: E402
 import valve_area_diagnosis as diag  # noqa: E402
 
 SESSION = REPO / "dataset/example/Session_Logs/session_2026-10-06_13-45-54.json"
 EXPORT = REPO / "dataset/example/export"
+# A4 template outlines in GVR-Pipeline.blend (Boundary edge loops at unit scale, measured 2026-11-18).
+A4_MV = vgc.TemplateShape(2.56430, 2.00729, 1.68554)
+A4_AV = vgc.TemplateShape(3.12145, 2.0, 2.0)
 FAILURES: list = []
 
 
@@ -222,7 +225,7 @@ def run_check(objects, ventricles, session, panel, approach=4, import_dir=None):
     sys.modules["calculate_valve_diameters"] = cvd
     mv, av = session["MV"], session["AV"]
     scene = types.SimpleNamespace(
-        approach=approach, valve_check_tolerance=2.0, valve_ratio_target=1.3,
+        approach=approach, valve_check_tolerance=2.0, valve_R_target=1.3,
         ventricle_import_dir=import_dir if import_dir is not None else str(REPO / "dataset/example/STL"),
         mitral_width=panel["MV"][0], mitral_depth=panel["MV"][1], aortic_diameter=panel["AV"],
         translation_mitral=mv["translation"], angle_mitral=mv["angles"],
@@ -247,8 +250,8 @@ def case_with_summary(tmp, name, header, row):
 def placed_area_ratio(verts, faces, stretch):
     """Top-view area and width/depth of a template mesh multiplied by the stretch factors."""
     p = [(x * stretch[0], y * stretch[1], z * stretch[2]) for x, y, z in verts]
-    xs, ys = [q[0] for q in p], [q[1] for q in p]
-    return vgc.projected_faces_area(p, faces, (0.0, 0.0, 1.0)), (max(xs) - min(xs)) / (max(ys) - min(ys))
+    x0, x1, y0, y1 = vgc.xy_extent(p)
+    return vgc.projected_faces_area(p, faces, (0.0, 0.0, 1.0)), (x1 - x0) / (y1 - y0)
 
 
 def test_valve_sizes(blend) -> None:
@@ -257,10 +260,10 @@ def test_valve_sizes(blend) -> None:
     objects = template_objects(blend)
     s4, s5 = vgc.template_shapes(mock_bpy(objects), 4), vgc.template_shapes(mock_bpy(objects), 5)
     mv4, av4 = s4["MV"], s4["AV"]
-    check(close(mv4.area, 2.5643, 1e-4) and close(mv4.width, 2.00729, 1e-4) and close(mv4.depth, 1.68554, 1e-4),
-          f"A4 MV a = {mv4.area:.5f}, W_t = {mv4.width:.5f}, D_t = {mv4.depth:.5f} (expected 2.5643, 2.00729, 1.68554)")
+    check(all(close(getattr(mv4, k), getattr(A4_MV, k), 1e-4) for k in ("area", "width", "depth")),
+          f"A4 MV a = {mv4.area:.5f}, W_t = {mv4.width:.5f}, D_t = {mv4.depth:.5f} (expected {A4_MV})")
     check(close(mv4.fill, 0.75791, 1e-4), f"A4 MV fill factor c = {mv4.fill:.5f} (expected 0.75791)")
-    check(close(av4.area, 3.12145, 1e-4), f"A4 AV a = {av4.area:.5f} (expected 3.12145)")
+    check(close(av4.area, A4_AV.area, 1e-4), f"A4 AV a = {av4.area:.5f} (expected {A4_AV.area})")
     check(close(s5["MV"].area, 2.51766, 1e-4) and close(s5["AV"].area, 3.13655, 1e-4),
           f"A5 MV a = {s5['MV'].area:.5f}, AV a = {s5['AV'].area:.5f} (expected 2.51766, 3.13655)")
 

@@ -59,7 +59,7 @@ main(args=['install','pandas'])
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:
 - Search *LoopTools* → check *Mesh: LoopTools* → Save Preferences.
-- Install stl-plot.py, valve_geometry_check.py, calculate_valve_diameters.py and then ventricle-reconstruction-pipeline.py (**in this order**) from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
+- Install stl-plot.py, valve_geometry.py, calculate_valve_diameters.py and then ventricle-reconstruction-pipeline.py (**in this order**) from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
 - Open the GVR-Pipeline.blend scene from the repository → after that a new category should appear on the right side of the 3D Viewport called 'GVR-Pipeline'. Clicking it will open panels containing buttons, etc. used for the pipeline.
 ## Merge imperm into res
 The porous valve zones used to have three parts: *perm*, *res* and *imperm* (the outer band at the annulus). *imperm* is now part of *res*: the CFD lets the flow pass the whole valve disc, and *Calculate Radii* scales that disc to the fitted area. A `GVR-Pipeline.blend` from before this change still holds the templates `A3_*_imperm`, `A4_*_imperm` and `A5_AV_imperm`, and the pipeline stops with an error until they are merged. Do this once:
@@ -219,7 +219,7 @@ Compares the mitral and aortic valve areas of the built geometry with the areas 
   - `summary.csv` has the old format (radii instead of sizes): then only A_fit is used; run *Calculate Radii* again.
 - **Settings** (panel *Valve options*): *Tolerance*, the allowed area deviation, default 2 %.
 - **Output per valve:** the areas, their share of the target, the mean velocity factor at equal flow, the size factor for width and depth (or the diameter) that would make the area match, the MV width/depth and the stretch factors.
-- The check, *Calculate Radii* and the build stop with an error while the .blend still holds imperm templates (see *Merge imperm into res*).
+- *Calculate Radii* and the build stop with an error while the .blend still holds imperm templates (see *Merge imperm into res*). The check then reports a warning with the same hint and leaves the reconstruction as it is.
 
 The same comparison runs outside Blender with `tools/valve_area_diagnosis.py` (standard library only). It reads the templates from `GVR-Pipeline.blend` and measures exported STLs. Example from the repository root:
 ```bash

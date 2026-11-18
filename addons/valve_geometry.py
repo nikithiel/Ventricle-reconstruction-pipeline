@@ -33,7 +33,7 @@ Vec = Tuple[float, float, float]
 
 VALVES = ("MV", "AV")
 VALVE_MODE = {"MV": "Mitral", "AV": "Aortic"}
-ZONE_TYPES = ("perm", "res")  # imperm is merged into res (ADR 0001)
+ZONE_TYPES = ("perm", "res")  # imperm is flowed through and merged into res (tools/merge_imperm_into_res.py)
 
 
 # -----------------------------------------------------------------------------
@@ -311,6 +311,7 @@ def order_edge_loop(edges: Sequence[Tuple[int, int]]) -> List[int]:
 # -----------------------------------------------------------------------------
 
 RATIO_BAND = (1.15, 1.35)  # plausible MV width/depth (healthy adults); outside it the panel and the check warn
+BAND_TEXT = f"{RATIO_BAND[0]:g} to {RATIO_BAND[1]:g}"
 MERGE_HINT = ("Run tools/merge_imperm_into_res.py once in Blender 3.1 (see README, 'Merge imperm into res'), "
               "then save the .blend.")
 
@@ -320,7 +321,7 @@ class TemplateShape:
     """Outline of a valve template at unit scale (A{n}_{MV,AV}_Boundary).
 
     area is the flow opening area at factor 1 (A3/A4 and all AV: the whole disc).
-    A5 MV: also the disc for now; scaling the opening of the open leaflets (backlog P13) goes here.
+    A5 MV: also the disc for now; scaling the opening of the open leaflets (planned) goes here.
     """
     area: float   # a
     width: float  # W_t, extent in template x (commissure to commissure for the MV)
@@ -332,28 +333,52 @@ class TemplateShape:
         return self.area / (self.width * self.depth)
 
 
-def _shape(points: Sequence[Sequence[float]], area: float) -> TemplateShape:
+@dataclass(frozen=True)
+class ValveSizes:
+    """MV width and depth and AV diameter, in one unit (mm in the panel and the check, m in summary.csv)."""
+    width_MV: float
+    depth_MV: float
+    d_AV: float
+
+
+def xy_extent(points: Sequence[Sequence[float]]) -> Tuple[float, float, float, float]:
+    """(x min, x max, y min, y max) of points."""
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
-    return TemplateShape(area, max(xs) - min(xs), max(ys) - min(ys))
+    return min(xs), max(xs), min(ys), max(ys)
 
 
-def shape_from_loop(verts: Sequence[Sequence[float]], edges: Sequence[Tuple[int, int]]) -> TemplateShape:
-    """Shape of a closed edge loop (the *_Boundary templates). Raises ValueError if it is no single loop."""
-    pts = [verts[i] for i in order_edge_loop(edges)]
-    return _shape(pts, polygon_area_xy(pts))
+def template_outline(boundary: Optional[Tuple[Sequence[Vec], Sequence[Tuple[int, int]]]],
+                     surface: Optional[Tuple[Sequence[Vec], Sequence[Sequence[int]]]]):
+    """(shape, outline points, "Boundary" or "Surface") of a valve template at unit scale, or None.
+
+    boundary = (verts, edges) of A{n}_{v}_Boundary, surface = (verts, faces) of A{n}_{v}_Surface, each
+    None if missing. The closed edge loop of the boundary is the outline; the faces of the flat surface
+    disc are the fallback if the boundary is missing or no single loop.
+    """
+    def outline(pts, area, used):
+        x0, x1, y0, y1 = xy_extent(pts)
+        return TemplateShape(area, x1 - x0, y1 - y0), pts, used
+
+    if boundary is not None:
+        verts, edges = boundary
+        try:
+            pts = [verts[i] for i in order_edge_loop(edges)]
+        except ValueError:
+            pass
+        else:
+            return outline(pts, polygon_area_xy(pts), "Boundary")
+    if surface is not None:
+        verts, faces = surface
+        pts = [verts[i] for i in sorted({i for f in faces for i in f})]
+        return outline(pts, projected_faces_area(verts, faces, (0.0, 0.0, 1.0)), "Surface")
+    return None
 
 
-def shape_from_faces(verts: Sequence[Sequence[float]], faces: Sequence[Sequence[int]]) -> TemplateShape:
-    """Shape of a flat disc (the *_Surface templates), the fallback if the boundary is no single loop."""
-    used = sorted({i for f in faces for i in f})
-    return _shape([verts[i] for i in used], projected_faces_area(verts, faces, (0.0, 0.0, 1.0)))
-
-
-def mv_size(a_fit: float, shape: TemplateShape, ratio: float) -> Tuple[float, float]:
-    """(width, depth) of the MV whose built area is a_fit and whose width/depth is ratio."""
-    depth = math.sqrt(a_fit / (shape.fill * ratio))
-    return ratio * depth, depth
+def mv_size(a_fit: float, shape: TemplateShape, R_target: float) -> Tuple[float, float]:
+    """(width, depth) of the MV whose built area is a_fit and whose width/depth is R_target."""
+    depth = math.sqrt(a_fit / (shape.fill * R_target))
+    return R_target * depth, depth
 
 
 def av_diameter(a_fit: float, shape: TemplateShape) -> float:
@@ -407,14 +432,11 @@ class FitSummary:
     bpm_mv: Optional[float]
     bpm_av: Optional[float]
     approach: Optional[int] = None
-    R_target: Optional[float] = None
-    width_MV_mm: Optional[float] = None  # None in the old format (radii instead of sizes)
-    depth_MV_mm: Optional[float] = None
-    d_AV_mm: Optional[float] = None
+    sizes_mm: Optional[ValveSizes] = None  # None in the old format (radii instead of sizes)
 
     @property
     def old_format(self) -> bool:
-        return self.width_MV_mm is None
+        return self.sizes_mm is None
 
 
 def _float(row: Dict[str, str], key: str) -> Optional[float]:
@@ -444,11 +466,8 @@ def read_fit_summary(path: Path) -> FitSummary:
     if missing:
         raise ValueError(f"{path} lacks valid values for {missing}")
 
-    def mm(key: str) -> Optional[float]:
-        v = _float(row, key)
-        return None if v is None else v * 1e3
-
     approach = _float(row, "approach")
+    sizes = [_float(row, k) for k in ("width_MV", "depth_MV", "d_AV")]
     return FitSummary(
         path=path,
         case_path=(row.get("path") or "").strip(),
@@ -457,10 +476,7 @@ def read_fit_summary(path: Path) -> FitSummary:
         bpm_mv=_float(row, "bpm_mv"),
         bpm_av=_float(row, "bpm_av"),
         approach=None if approach is None else int(approach),
-        R_target=_float(row, "R_target"),
-        width_MV_mm=mm("width_MV"),
-        depth_MV_mm=mm("depth_MV"),
-        d_AV_mm=mm("d_AV"),
+        sizes_mm=None if None in sizes else ValveSizes(*(v * 1e3 for v in sizes)),
     )
 
 
@@ -477,37 +493,39 @@ def _norm_path(p: str) -> str:
     return str(p).replace("\\", "/").rstrip("/").lower()
 
 
-def expected_areas(summary: Optional[FitSummary], width: float, depth: float, diameter: float,
+def expected_areas(summary: Optional[FitSummary], panel: ValveSizes,
                    shapes: Dict[str, TemplateShape], approach: Optional[int] = None,
                    case_dir: Optional[Path] = None, size_tol: float = 0.005
                    ) -> Tuple[Dict[str, Expectation], List[str]]:
     """Target area per valve plus notes.
 
     The target is A_fit from summary.csv when available, otherwise the area the panel values
-    stand for with the measured templates.
+    stand for with the measured templates. panel holds the panel values in mm.
     """
     notes: List[str] = []
-    panel = {"MV": shapes["MV"].fill * width * depth, "AV": shapes["AV"].area * (diameter / 2.0) ** 2}
-    stretch = {"MV": mv_stretch(width, depth, shapes["MV"]), "AV": av_stretch(diameter)}
+    panel_mm2 = {"MV": shapes["MV"].fill * panel.width_MV * panel.depth_MV,
+                 "AV": shapes["AV"].area * (panel.d_AV / 2.0) ** 2}
+    stretch = {"MV": mv_stretch(panel.width_MV, panel.depth_MV, shapes["MV"]), "AV": av_stretch(panel.d_AV)}
     exp: Dict[str, Expectation] = {}
     if summary is None:
         for v in VALVES:
-            exp[v] = Expectation(v, panel[v], "panel values (no summary.csv)", panel[v], stretch[v])
+            exp[v] = Expectation(v, panel_mm2[v], "panel values (no summary.csv)", panel_mm2[v], stretch[v])
         notes.append("No summary.csv found: the target is the area the panel values stand for "
                      "(c * width * depth, a * (d/2)^2), not a fitted area.")
         return exp, notes
 
-    exp["MV"] = Expectation("MV", summary.A_MV_mm2, "summary.csv (A_fit)", panel["MV"], stretch["MV"])
-    exp["AV"] = Expectation("AV", summary.A_AV_mm2, "summary.csv (A_fit)", panel["AV"], stretch["AV"])
+    exp["MV"] = Expectation("MV", summary.A_MV_mm2, "summary.csv (A_fit)", panel_mm2["MV"], stretch["MV"])
+    exp["AV"] = Expectation("AV", summary.A_AV_mm2, "summary.csv (A_fit)", panel_mm2["AV"], stretch["AV"])
 
     if summary.old_format:
         notes.append("summary.csv has the old format (radii, no width/depth/diameter): only A_fit is used. "
                      "Run 'Calculate Radii' again.")
     else:
-        pairs = [("MV width", width, summary.width_MV_mm), ("MV depth", depth, summary.depth_MV_mm),
-                 ("AV diameter", diameter, summary.d_AV_mm)]
-        diffs = [f"{name} {used:.3f} mm vs. {fit:.3f} mm" for name, used, fit in pairs
-                 if fit is not None and abs(used - fit) > size_tol * max(abs(fit), 1e-12)]
+        fit = summary.sizes_mm
+        pairs = [("MV width", panel.width_MV, fit.width_MV), ("MV depth", panel.depth_MV, fit.depth_MV),
+                 ("AV diameter", panel.d_AV, fit.d_AV)]
+        diffs = [f"{name} {used:.3f} mm vs. {f:.3f} mm" for name, used, f in pairs
+                 if abs(used - f) > size_tol * max(abs(f), 1e-12)]
         if diffs:
             notes.append("The panel values differ from summary.csv (" + "; ".join(diffs)
                          + "). Either they were changed by hand after 'Calculate Radii' or the summary "
@@ -584,6 +602,10 @@ class Row:
     def ratio(self) -> Optional[float]:
         return self.width_mm / self.depth_mm if self.width_mm and self.depth_mm else None
 
+    @property
+    def ratio_outside_band(self) -> bool:
+        return self.ratio is not None and not ratio_in_band(self.ratio)
+
 
 def evaluate(measurements: Dict[str, Measurement], expectations: Dict[str, Expectation],
              tol_percent: float) -> Tuple[List[Row], bool]:
@@ -602,7 +624,7 @@ def evaluate(measurements: Dict[str, Measurement], expectations: Dict[str, Expec
             status = "OK" if abs(area / e.target_mm2 - 1.0) * 100.0 <= tol_percent else "WARN"
         row = Row(v, e.target_mm2, e.source, e.panel_mm2, e.stretch, m.ring_mm2, m.open_mm2, m.zones_source,
                   area, status, m.n_frames, m.frame_spread, m.width_mm, m.depth_mm)
-        if status == "WARN" or (row.ratio is not None and not ratio_in_band(row.ratio)):
+        if status == "WARN" or row.ratio_outside_band:
             ok = False
         rows.append(row)
     return rows, ok
@@ -615,7 +637,7 @@ def _fmt(val: Optional[float], spec: str = ".2f", suffix: str = "") -> str:
 def format_report(rows: Sequence[Row], notes: Sequence[str], tol_percent: float) -> List[str]:
     """Console lines: one block per valve, then notes."""
     lines = [f"Reference: perm+res (imperm is part of res), tolerance +-{tol_percent:g} % area, "
-             f"MV width/depth {RATIO_BAND[0]:g} to {RATIO_BAND[1]:g}"]
+             f"MV width/depth {BAND_TEXT}"]
     for r in rows:
         lines.append(f"{r.valve}: target {r.target_mm2:.2f} mm2 [{r.target_source}]  ->  {r.status}")
         frames = ""
@@ -631,7 +653,7 @@ def format_report(rows: Sequence[Row], notes: Sequence[str], tol_percent: float)
             lines.append(f"    mean velocity x{r.velocity_factor:.3f} at equal flow; "
                          f"size factor to match the target x{r.size_factor:.3f}")
         if r.ratio is not None:
-            band = "" if ratio_in_band(r.ratio) else f" outside {RATIO_BAND[0]:g} to {RATIO_BAND[1]:g} -> WARN"
+            band = f" outside {BAND_TEXT} -> WARN" if r.ratio_outside_band else ""
             if r.ratio < 1.0:
                 band += " (width and depth swapped?)"
             lines.append(f"    width {r.width_mm:.2f} mm, depth {r.depth_mm:.2f} mm, width/depth {r.ratio:.2f}{band}")
@@ -693,17 +715,15 @@ def template_shapes(bpy, approach: int) -> Dict[str, TemplateShape]:
     for v in VALVES:
         boundary = bpy.data.objects.get(f"A{approach}_{v}_Boundary")
         surface = bpy.data.objects.get(f"A{approach}_{v}_Surface")
-        try:
-            if boundary is None:
-                raise ValueError("missing")
-            shapes[v] = shape_from_loop([tuple(p.co) for p in boundary.data.vertices],
-                                        [tuple(e.vertices) for e in boundary.data.edges])
-        except ValueError:
-            if surface is None:
-                raise TemplateError(f"Template A{approach}_{v}_Boundary is missing or not a single edge loop, "
-                                    f"and A{approach}_{v}_Surface is missing.")
-            shapes[v] = shape_from_faces([tuple(p.co) for p in surface.data.vertices],
-                                         [tuple(p.vertices) for p in surface.data.polygons])
+        outline = template_outline(
+            None if boundary is None else ([tuple(p.co) for p in boundary.data.vertices],
+                                           [tuple(e.vertices) for e in boundary.data.edges]),
+            None if surface is None else ([tuple(p.co) for p in surface.data.vertices],
+                                          [tuple(f.vertices) for f in surface.data.polygons]))
+        if outline is None:
+            raise TemplateError(f"Template A{approach}_{v}_Boundary is missing or not a single edge loop, "
+                                f"and A{approach}_{v}_Surface is missing.")
+        shapes[v] = outline[0]
     return shapes
 
 
@@ -741,9 +761,8 @@ def _measure_valve(bpy, scene, valve: str, ventricles) -> Measurement:
             frame = frame_from_normal(origin, normal)
             if valve == "MV":  # extent in the frame the build placed the template in (local x/y = template x/y)
                 scene_frame = valve_frame(scene.translation_mitral, scene.angle_mitral)
-                loc = [scene_frame.to_local(verts[i]) for f in faces for i in f]
-                m.width_mm = max(p[0] for p in loc) - min(p[0] for p in loc)
-                m.depth_mm = max(p[1] for p in loc) - min(p[1] for p in loc)
+                x0, x1, y0, y1 = xy_extent([scene_frame.to_local(verts[i]) for f in faces for i in f])
+                m.width_mm, m.depth_mm = x1 - x0, y1 - y0
     if rings:
         areas = [a for _, a, _ in rings]
         m.ring_mm2 = areas[0]
@@ -879,14 +898,13 @@ def run_valve_area_check(context, ventricles) -> Tuple[bool, List[str], str]:
     else:
         notes.append("Import folder not set or missing; summary.csv cannot be located.")
 
-    expectations, exp_notes = expected_areas(summary, scene.mitral_width, scene.mitral_depth,
-                                             scene.aortic_diameter, shapes, approach, case_dir)
+    panel = ValveSizes(scene.mitral_width, scene.mitral_depth, scene.aortic_diameter)
+    expectations, exp_notes = expected_areas(summary, panel, shapes, approach, case_dir)
     notes = exp_notes + notes
     rows, ok = evaluate(measurements, expectations, tol)
     lines = format_report(rows, notes, tol)
     problems = [f"{r.valve} outside +-{tol:g} % of the target area" for r in rows if r.status == "WARN"]
-    problems += [f"MV width/depth {r.ratio:.2f} outside {RATIO_BAND[0]:g} to {RATIO_BAND[1]:g}"
-                 for r in rows if r.ratio is not None and not ratio_in_band(r.ratio)]
+    problems += [f"MV width/depth {r.ratio:.2f} outside {BAND_TEXT}" for r in rows if r.ratio_outside_band]
     if problems:
         short = f"Valve area check: {'; '.join(problems)} (see System Console)."
     else:
