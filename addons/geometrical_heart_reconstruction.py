@@ -38,7 +38,7 @@ from pathlib import Path
 
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
-from valve_geometry_check import run_valve_area_check
+from valve_geometry_check import run_valve_area_check, template_shapes, mv_stretch, av_stretch, ratio_in_band, RATIO_BAND, TemplateError
 
 try: # A broken settings log must never keep the addon from registering.
     import session_log
@@ -834,17 +834,19 @@ def is_inside(p, cut_obj):
     return not (v < 0.0)
 
 def get_valve_data(context, valve_mode):
-    """ Return data for specific valve type"""
+    """ Return translation, angles and the stretch factors in template x and y of a valve.
+
+    The stretch factors follow from the panel sizes (mm) and the template outline measured in the .blend,
+    which raises TemplateError while imperm templates are left (valve_geometry_check.template_shapes)."""
     if valve_mode == "Aortic":
         translation = context.scene.translation_aortic
         angles = np.radians(context.scene.angle_aortic)
-        radius_vertical = context.scene.aortic_radius
-        radius_horizontal = context.scene.aortic_radius
+        radius_vertical, radius_horizontal, _ = av_stretch(context.scene.aortic_diameter)
     elif valve_mode == "Mitral":
         translation = context.scene.translation_mitral
         angles = np.radians(context.scene.angle_mitral)
-        radius_vertical = context.scene.mitral_radius_long
-        radius_horizontal = context.scene.mitral_radius_small
+        shape = template_shapes(bpy, context.scene.approach)["MV"]
+        radius_vertical, radius_horizontal, _ = mv_stretch(context.scene.mitral_width, context.scene.mitral_depth, shape)
     elif valve_mode == "Front":
         pass
     elif valve_mode == "Back":
@@ -1075,8 +1077,10 @@ def create_basal_region_for_object(context, reference_copy):
     # Poisson with remeshing and triangulation.
     poisson_basal = create_poisson_from_object_pointcloud(context, reference_copy)
     # Compute voxel_size for remesh and merge dependent of the smallest valve size. Reduced for approach 5.
-    if context.scene.approach == 5: voxel_size = min(context.scene.aortic_radius, context.scene.mitral_radius_long, context.scene.mitral_radius_small) / 6 
-    else: voxel_size = min(context.scene.aortic_radius, context.scene.mitral_radius_long, context.scene.mitral_radius_small) / 4 
+    _, _, mitral_x, mitral_y = get_valve_data(context, "Mitral")
+    _, _, aortic_s, _ = get_valve_data(context, "Aortic")
+    if context.scene.approach == 5: voxel_size = min(aortic_s, mitral_x, mitral_y) / 6 
+    else: voxel_size = min(aortic_s, mitral_x, mitral_y) / 4 
     apply_voxel_remesh(voxel_size) # Apply Remesh for better mesh quality (remove small mesh elements with high cell skewness).
     # Triangulate remesh.
     bpy.ops.object.modifier_add(type='TRIANGULATE')
@@ -1704,8 +1708,9 @@ def add_vessels_and_valves(context):
     add_aorta(context)
     add_atrium(context)
     # Porous mitral valve are only inserted in the porous medium approach. For the interpolated mitral valve approach the mitral valve becomes part of the ventricle. Aortic valve is not inserted in A3.
-    if context.scene.approach == 4 or context.scene.approach == 5: create_porous_valve_zones(context, 'Aortic', ['A4_AV_imperm', 'A4_AV_perm', 'A4_AV_res']) 
-    if context.scene.approach == 4: create_porous_valve_zones(context, 'Mitral', ['A4_MV_imperm', 'A4_MV_perm', 'A4_MV_res']) 
+    # imperm is merged into res in the .blend (tools/merge_imperm_into_res.py); get_valve_data() stops while it is left.
+    if context.scene.approach == 4 or context.scene.approach == 5: create_porous_valve_zones(context, 'Aortic', ['A4_AV_perm', 'A4_AV_res']) 
+    if context.scene.approach == 4: create_porous_valve_zones(context, 'Mitral', ['A4_MV_perm', 'A4_MV_res']) 
 
 def add_atrium(context):
     """Copy atrium and place it above the mitral valve as a separate object"""
@@ -1734,7 +1739,7 @@ def create_porous_valve_zones(context, valve_mode, valve_strings):
     elif valve_mode == 'Mitral':
         valve_substring = "mv"
     else: return False
-    obj_types = ["_perm", "_res", "_imperm"] # Collection of valve types for name setup.
+    obj_types = ["_perm", "_res"] # Collection of valve types for name setup.
     for obj_str in valve_strings:
         for obj_type in obj_types:
             if obj_type in obj_str: new_name = f"{valve_substring}{obj_type}" # Combine substrings to string of new object.
@@ -1785,6 +1790,15 @@ def check_pipeline_triangulated(context, ventricles):
                     f"The CFD export needs one shared topology across all frames.")
     return None
 
+def valve_template_shapes(operator, context):
+    """Template outlines of the current approach, or None after reporting why they cannot be used (imperm left)"""
+    try:
+        return template_shapes(bpy, context.scene.approach)
+    except TemplateError as e:
+        cons_print(str(e))
+        operator.report({'ERROR'}, str(e))
+        return None
+
 def report_valve_areas(operator, context, ventricles):
     """Compare the built valve areas with calculate_valve_diameters.py and print the result.
 
@@ -1823,6 +1837,7 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
     bl_idname = 'heart.quick_recon'
     bl_label = 'Quick geometrical reconstruction of all ventricles containing all steps of the reconstruction algorithm in one execution.'
     def execute(self, context):
+        if valve_template_shapes(self, context) is None: return {'CANCELLED'} # Stop before anything is built while imperm templates are left.
         if context.scene.approach == 5:
             if not interpolate_ventricle(context): return{'CANCELLED'} # Interpolate ventricle geometry.
         # Remember the ventricles by name: mesh_connect_apical_and_basal() clears the selection, and the
@@ -2204,9 +2219,15 @@ class PANEL_Valves(bpy.types.Panel):
         row = layout.row()
         row.prop(context.scene, 'angle_mitral', text="Angle", icon='META_ELLIPSOID')
         row = layout.row()
-        row.prop(context.scene, 'mitral_radius_long', text="Long mitral radius", icon='META_ELLIPSOID')
+        row.prop(context.scene, 'mitral_width', text="MV width (mm)", icon='META_ELLIPSOID')
         row = layout.row()
-        row.prop(context.scene, 'mitral_radius_small', text="Small mitral radius")
+        row.prop(context.scene, 'mitral_depth', text="MV depth (mm)")
+        row = layout.row()
+        ratio = context.scene.mitral_width / context.scene.mitral_depth
+        if ratio_in_band(ratio): row.label(text=f"width/depth = {ratio:.2f}")
+        else: row.label(text=f"width/depth = {ratio:.2f}, outside {RATIO_BAND[0]:g} to {RATIO_BAND[1]:g}", icon='ERROR')
+        row = layout.row()
+        row.prop(context.scene, 'valve_ratio_target', text="R_target (width/depth for Calculate Radii)")
         row = layout.row()
         row.label(text= "Aortic valve", icon = 'MESH_CIRCLE')   
         row = layout.row()
@@ -2214,11 +2235,10 @@ class PANEL_Valves(bpy.types.Panel):
         row = layout.row()
         row.prop(context.scene, 'angle_aortic', text="Angle")
         row = layout.row()
-        row.prop(context.scene, 'aortic_radius', text="Aortic radius", icon='META_BALL')
+        row.prop(context.scene, 'aortic_diameter', text="AV diameter (mm)", icon='META_BALL')
         row = layout.row()
         row.label(text= "Valve area check")
         row = layout.row()
-        row.prop(context.scene, 'valve_check_imperm_open', text="imperm counts as open")
         row.prop(context.scene, 'valve_check_tolerance', text="Tolerance")
         if dev_env_tools:
             # Calculate Valve Radii
@@ -3015,6 +3035,9 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
             self.report({'ERROR'}, msg)
             return {'CANCELLED'}
 
+        shapes = valve_template_shapes(self, context) # Template outlines of the current approach; stops while imperm is left.
+        if shapes is None: return {'CANCELLED'}
+
         cons_print(f"Calculating valve radii from: {import_dir}")
 
         try:
@@ -3023,7 +3046,8 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 try:
-                    figs, res = main_calc_diameter(import_dir, 400)
+                    figs, sizes = main_calc_diameter(import_dir, 400, scene.approach, scene.valve_ratio_target,
+                                                     shapes["MV"], shapes["AV"])
                 finally:
                     for w in caught:
                         cons_print(f"Warning: {w.message}")
@@ -3034,14 +3058,24 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
             self.report({'ERROR'}, err.summary)
             return {'CANCELLED'}
 
-        # Reached on success only, so the scene keeps its previous radii on failure.
-        r_mv_small, r_mv_long, r_av = res[0] * 1000, res[1] * 1000, res[2] * 1000
-        scene.mitral_radius_small = r_mv_small
-        scene.mitral_radius_long = r_mv_long
-        scene.aortic_radius = r_av
+        # Reached on success only, so the scene keeps its previous values on failure.
+        width, depth, diameter = sizes.width_MV * 1000, sizes.depth_MV * 1000, sizes.d_AV * 1000
+        scene.mitral_width = width
+        scene.mitral_depth = depth
+        scene.aortic_diameter = diameter
 
-        msg = (f"Calculate radii: MV small={r_mv_small:.3f} mm, "
-               f"MV long={r_mv_long:.3f} mm, AV={r_av:.3f} mm.")
+        mv, av = shapes["MV"], shapes["AV"]
+        cons_print(f"MV: A_fit {sizes.A_MV * 1e6:.3f} mm2, template A{scene.approach} a = {mv.area:.5f} (c = {mv.fill:.5f}), "
+                   f"R_target {scene.valve_ratio_target:g}: width {width:.3f} mm, depth {depth:.3f} mm, "
+                   "stretch factors x {:.3f}, y {:.3f}, z {:.3f}".format(*mv_stretch(width, depth, mv)))
+        cons_print(f"AV: A_fit {sizes.A_AV * 1e6:.3f} mm2, template A{scene.approach} a = {av.area:.5f}: "
+                   f"diameter {diameter:.3f} mm, stretch factor {av_stretch(diameter)[0]:.3f}")
+        if scene.approach == 5:
+            cons_print("Warning: A5 scales the MV to its ring area, not yet to the opening of the fully open leaflets "
+                       "(backlog P13). Read the A5 MV results with that in mind.")
+
+        msg = (f"Calculate radii: MV width={width:.3f} mm, depth={depth:.3f} mm, "
+               f"AV diameter={diameter:.3f} mm.")
         cons_print(msg)
         self.report({'INFO'}, msg)
         return{"FINISHED"}
@@ -3255,16 +3289,16 @@ scene_properties = {
     "last_rotation_translation": bpy.props.FloatVectorProperty(name="Translation of the last rotation", default=(0, 0, 0)),
     "last_rotation_time": bpy.props.StringProperty(name="Time of the last rotation", default=""),
     # Mitral valve.
-    "mitral_radius_long": bpy.props.FloatProperty(name="mitral_radius_long", default=6, min=0.01),
-    "mitral_radius_small": bpy.props.FloatProperty(name="mitral_radius_small", default=3, min=0.01),
+    "mitral_width": bpy.props.FloatProperty(name="MV width", description="Mitral valve width in mm, commissure to commissure (template x). 'Calculate Radii' fills it from A_fit", default=13.0, min=0.01),
+    "mitral_depth": bpy.props.FloatProperty(name="MV depth", description="Mitral valve depth in mm, antero-posterior (template y). 'Calculate Radii' fills it from A_fit", default=10.0, min=0.01),
+    "valve_ratio_target": bpy.props.FloatProperty(name="R_target", description="MV width/depth that 'Calculate Radii' builds (model parameter, the same for all cases)", default=1.3, min=0.1),
     "translation_mitral": bpy.props.FloatVectorProperty(name="Mitral valve translation", default=(0, 0, 1)),
     "angle_mitral": bpy.props.FloatVectorProperty(name="Mitral valve rotation", default=(0, 0, 0)),
     # Aortic valve.
-    "aortic_radius": bpy.props.FloatProperty(name="aortic_radius", default=2, min=0.01),
+    "aortic_diameter": bpy.props.FloatProperty(name="AV diameter", description="Aortic valve diameter in mm. 'Calculate Radii' fills it from A_fit", default=7.0, min=0.01),
     "translation_aortic": bpy.props.FloatVectorProperty(name="Aortic valve translation", default=(0, 0, 1)),
     "angle_aortic": bpy.props.FloatVectorProperty(name="Aortic valve rotation", default=(0, 0, 0)),
     # Valve area check (valve_geometry_check.py), run at the end of 'Quick reconstruction'.
-    "valve_check_imperm_open": bpy.props.BoolProperty(name="imperm counts as open", description="Valve area check: compare the fitted area with the full valve disc (on) or only with the perm and res zones, i.e. imperm treated as a wall in the CFD (off)", default=True),
     "valve_check_tolerance": bpy.props.FloatProperty(name="Valve area tolerance", description="Valve area check: allowed deviation of the checked valve area from the fitted area", default=2.0, min=0.0, max=100.0, subtype='PERCENTAGE'),
     # Support structure.
     "ref_minima": bpy.props.FloatVectorProperty(name="Minima of reference object", default=(0, 0, 0)),

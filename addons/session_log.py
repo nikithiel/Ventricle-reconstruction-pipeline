@@ -24,7 +24,7 @@ import time
 
 import bpy
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: valves log width/depth/diameter in mm and the stretch factors instead of radii
 LOG_DIRNAME = "Session_Logs"
 FULL_LOG_NAME = "gvr_settings.json"
 ROTATION_LOG_NAME = "gvr_rotation.json"
@@ -122,6 +122,38 @@ def resolve_session_log_path(scene, stamp):
     return os.path.join(case_dir, LOG_DIRNAME, f"session_{stamp}.json")
 
 
+def _build_valves_section(scene):
+    """Valve sizes from the panel plus the stretch factors and zone thickness the build derives from them."""
+    try:
+        from valve_geometry_check import av_stretch, mv_stretch, template_shapes
+        mv_s = mv_stretch(scene.mitral_width, scene.mitral_depth, template_shapes(bpy, scene.approach)["MV"])
+        av_s = av_stretch(scene.aortic_diameter)
+    except Exception:  # e.g. imperm templates left in the .blend: log the sizes anyway
+        mv_s = av_s = None
+
+    def derived(stretch):
+        if stretch is None:
+            return {"stretch_factors": None, "zone_thickness_mm": None}
+        return {"stretch_factors": _v(stretch), "zone_thickness_mm": _f(0.1 * stretch[2])}  # A4 zones: height 0.1 at unit scale
+
+    return {
+        "ratio_target": _f(scene.valve_ratio_target),
+        "mitral": {
+            "translation_mm": _v(scene.translation_mitral),
+            "angle_deg": _v(scene.angle_mitral),
+            "width_mm": _f(scene.mitral_width),
+            "depth_mm": _f(scene.mitral_depth),
+            **derived(mv_s),
+        },
+        "aortic": {
+            "translation_mm": _v(scene.translation_aortic),
+            "angle_deg": _v(scene.angle_aortic),
+            "diameter_mm": _f(scene.aortic_diameter),
+            **derived(av_s),
+        },
+    }
+
+
 def _build_rotation_section(scene):
     """The landmarks the user picked plus the transformation derived from them.
 
@@ -166,19 +198,7 @@ def build_full_settings(scene, *, trigger, addon_version=""):
             "pos_septum": _v(scene.pos_septum),
             "rotation": _build_rotation_section(scene),
         },
-        "valves": {
-            "mitral": {
-                "translation_mm": _v(scene.translation_mitral),
-                "angle_deg": _v(scene.angle_mitral),
-                "radius_long": _f(scene.mitral_radius_long),
-                "radius_small": _f(scene.mitral_radius_small),
-            },
-            "aortic": {
-                "translation_mm": _v(scene.translation_aortic),
-                "angle_deg": _v(scene.angle_aortic),
-                "radius": _f(scene.aortic_radius),
-            },
-        },
+        "valves": _build_valves_section(scene),
         "setup_variables": {
             "remove_basal_threshold": _f(scene.remove_basal_threshold),
             "mean_reference": bool(scene.mean_reference),

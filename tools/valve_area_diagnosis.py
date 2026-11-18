@@ -3,14 +3,14 @@
 
 What it does
   1. Reads the valve templates directly from GVR-Pipeline.blend (A3_/A4_/A5_ *_Boundary,
-     *_Surface, *_perm, *_res, *_imperm) and reports their areas at unit scale, i.e. the
-     factor a in  built area = a * r_long * r_small  (MV)  or  a * r^2  (AV).
-     calculate_valve_diameters.py assumes a = pi for both.
+     *_Surface, *_perm, *_res) and reports their outline at unit scale: area a, width W_t,
+     depth D_t and fill factor c = a / (W_t * D_t). Built area = c * width * depth (MV) or
+     a * (d/2)^2 (AV). A *_imperm left in the .blend is counted with *_res (not merged yet).
   2. --export DIR --session JSON: measures the valve discs in the exported atrium.stl,
-     aorta.stl and ventricle_*.stl, in the valve planes from the session log.
-  3. --summary CSV: compares with A_fit from calc_valve_diameters_outputs/summary.csv, for
-     both CFD treatments of *_imperm (counted as open / treated as a wall), and prints the
-     radius factors that would make the area match.
+     aorta.stl and ventricle_*.stl, in the valve planes from the session log (old logs with
+     radius_* = stretch factors, or new ones with sizes in mm and stretch factors).
+  3. --summary CSV: compares with A_fit from calc_valve_diameters_outputs/summary.csv (old or
+     new format) and prints the sizes that would make the area match.
   4. --t-cfd SECONDS: adds the cycle-duration factor T_Doppler / T_CFD (T_Doppler = 60/bpm).
 
 Only the Python standard library is needed. The area arithmetic and the comparison are the
@@ -209,20 +209,24 @@ class BlendFile:
 # -----------------------------------------------------------------------------
 
 class TemplateSet:
-    """Unit-scale areas and ring extents of one approach/valve template set."""
+    """Unit-scale outline, zone areas and ring points of one approach/valve template set."""
 
-    def __init__(self, approach: int, valve: str, areas: vgc.TemplateAreas,
-                 ring_source: str, extent: Optional[Tuple[float, float, float, float]],
-                 ring_xy: Optional[List[Tuple[float, float]]], zones: Dict[str, list]):
-        self.approach, self.valve, self.areas = approach, valve, areas
+    def __init__(self, approach: int, valve: str, shape: vgc.TemplateShape, areas: vgc.TemplateAreas,
+                 ring_source: str, extent: Tuple[float, float, float, float],
+                 ring_xy: List[Tuple[float, float]], zones: Dict[str, list], imperm_left: bool):
+        self.approach, self.valve, self.shape, self.areas = approach, valve, shape, areas
         self.ring_source, self.extent, self.zones = ring_source, extent, zones
-        self._ring_xy = ring_xy  # ring vertices (x, y) at unit scale; scaled by r_long / r_small later
+        self.imperm_left = imperm_left  # *_imperm still in the .blend; counted with res here
+        self._ring_xy = ring_xy  # ring vertices (x, y) at unit scale; multiplied by the stretch factors later
 
-    def ring_points(self) -> Optional[List[Tuple[float, float]]]:
+    def ring_points(self) -> List[Tuple[float, float]]:
         return self._ring_xy
 
 
 def load_templates(blend: BlendFile) -> Dict[Tuple[int, str], TemplateSet]:
+    """Template sets per (approach, valve). The outline follows vgc.template_shapes(): the
+    *_Boundary edge loop, else the *_Surface faces. A *_imperm left in the .blend is added to
+    *_res, as tools/merge_imperm_into_res.py does."""
     found: Dict[Tuple[int, str], Dict[str, str]] = {}
     for name in blend.objects:
         m = TEMPLATE_RE.match(name)
@@ -230,42 +234,36 @@ def load_templates(blend: BlendFile) -> Dict[Tuple[int, str], TemplateSet]:
             found.setdefault((int(m.group(1)), m.group(2)), {})[m.group(3)] = name
     out: Dict[Tuple[int, str], TemplateSet] = {}
     for (approach, valve), parts in sorted(found.items()):
-        ring = None
-        ring_source = ""
-        extent = None
-        ring_xy = None
+        shape = None
         if "Boundary" in parts:
             verts, faces, edges = blend.mesh(parts["Boundary"])
             try:
-                loop = vgc.order_edge_loop(edges)
-                ring = vgc.polygon_area_xy([verts[i] for i in loop])
+                shape = vgc.shape_from_loop(verts, edges)
                 ring_source = f"{parts['Boundary']} (edge loop)"
-                ring_xy = [(verts[i][0], verts[i][1]) for i in loop]
+                ring_xy = [(verts[i][0], verts[i][1]) for i in vgc.order_edge_loop(edges)]
             except ValueError:
                 pass
-        if ring is None and "Surface" in parts:
+        if shape is None and "Surface" in parts:
             verts, faces, _ = blend.mesh(parts["Surface"])
-            ring = vgc.projected_faces_area(verts, faces, (0.0, 0.0, 1.0))
+            shape = vgc.shape_from_faces(verts, faces)
             ring_source = f"{parts['Surface']} (faces)"
             ring_xy = [(v[0], v[1]) for v in verts]
-        if ring_xy:
-            xs = [p[0] for p in ring_xy]
-            ys = [p[1] for p in ring_xy]
-            extent = (min(xs), max(xs), min(ys), max(ys))
-        zone_areas: Dict[str, Optional[float]] = {}
+        if shape is None:
+            continue
+        xs = [q[0] for q in ring_xy]
+        ys = [q[1] for q in ring_xy]
+        zone_areas: Dict[str, float] = {}
         zone_tris: Dict[str, list] = {}
-        for z in vgc.ZONE_TYPES:
+        for z in vgc.ZONE_TYPES + ("imperm",):
             if z in parts:
                 verts, faces, _ = blend.mesh(parts[z])
-                zone_areas[z] = vgc.bottom_faces_area(verts, faces, vgc.UNIT_FRAME)
-                zone_tris[z] = _bottom_triangles(verts, faces)
-        if ring is None and all(z in zone_areas for z in vgc.ZONE_TYPES):
-            ring = sum(zone_areas.values())
-            ring_source = "sum of the zones"
-        if ring is None:
-            continue
-        areas = vgc.TemplateAreas(ring, zone_areas.get("perm"), zone_areas.get("res"), zone_areas.get("imperm"))
-        out[(approach, valve)] = TemplateSet(approach, valve, areas, ring_source, extent, ring_xy, zone_tris)
+                key = "res" if z == "imperm" else z
+                zone_areas[key] = zone_areas.get(key, 0.0) + vgc.bottom_faces_area(verts, faces, vgc.UNIT_FRAME)
+                zone_tris.setdefault(key, []).extend(_bottom_triangles(verts, faces))
+        areas = vgc.TemplateAreas(shape.area, zone_areas.get("perm"), zone_areas.get("res"))
+        out[(approach, valve)] = TemplateSet(approach, valve, shape, areas, ring_source,
+                                             (min(xs), max(xs), min(ys), max(ys)), ring_xy, zone_tris,
+                                             "imperm" in parts)
     return out
 
 
@@ -294,7 +292,7 @@ def _inside(p, t) -> bool:
 
 
 def ascii_map(ts: TemplateSet, width: int = 56) -> List[str]:
-    """Top view of the zones: '#' imperm, 'P' perm, '.' res (y up)."""
+    """Top view of the zones: 'P' perm, '.' res (y up)."""
     if not ts.zones or ts.extent is None:
         return ["    (no zones to draw)"]
     x0, x1, y0, y1 = ts.extent
@@ -308,13 +306,13 @@ def ascii_map(ts: TemplateSet, width: int = 56) -> List[str]:
         for i in range(width):
             x = x0 + (i + 0.5) * (x1 - x0) / width
             ch = " "
-            for z, c in (("imperm", "#"), ("perm", "P"), ("res", ".")):
+            for z, c in (("perm", "P"), ("res", ".")):
                 if any(_inside((x, y), t) for t in ts.zones.get(z, [])):
                     ch = c
                     break
             row += ch
         lines.append("    |" + row + "|")
-    lines.append("    legend: '#' imperm   'P' perm   '.' res   (template x to the right, y up)")
+    lines.append("    legend: 'P' perm   '.' res   (template x to the right, y up)")
     return lines
 
 
@@ -372,69 +370,68 @@ def section(title: str) -> None:
 
 
 def report_templates(templates: Dict[Tuple[int, str], TemplateSet], show_map: bool) -> None:
-    section("1) Valve templates in the .blend at unit scale (radii = 1)")
-    print("built area = a * r_long * r_small (MV) or a * r^2 (AV); calculate_valve_diameters.py assumes a = pi")
+    section("1) Valve templates in the .blend at unit scale")
+    print("built area = c * width * depth (MV) or a * (d/2)^2 (AV), with c = a / (W_t * D_t)")
     print("Used by the pipeline: A4 zones for the MV in A4 and for the AV in A4 and A5; A3 builds no zone objects.")
     for (approach, valve), ts in templates.items():
-        a = ts.areas
+        sh, a = ts.shape, ts.areas
+        x0, x1, y0, y1 = ts.extent
         print()
-        print(f"A{approach} {valve}   ring a = {a.ring:.4f}  ({100 * a.ring / math.pi:.1f} % of pi)   [{ts.ring_source}]")
-        if ts.extent:
-            x0, x1, y0, y1 = ts.extent
-            print(f"    ring extent x [{x0:.3f}, {x1:.3f}]  y [{y0:.3f}, {y1:.3f}]  "
-                  f"-> half widths {0.5 * (x1 - x0):.3f} (x) and {0.5 * (y1 - y0):.3f} (y)")
-        if a.open is not None and a.imperm is not None:
-            tot = a.perm + a.res + a.imperm
-            print(f"    zones: perm {a.perm:.4f}  res {a.res:.4f}  imperm {a.imperm:.4f}  (sum {tot:.4f})")
-            print(f"    open area perm+res = {a.open:.4f} = {100 * a.open / tot:.1f} % of the ring, "
-                  f"{100 * a.open / math.pi:.1f} % of pi")
-            for label, area in (("imperm counts as open", a.ring), ("imperm is a wall", a.open)):
-                print(f"    {label:22s}: mean velocity x{math.pi / area:.3f} at equal flow; "
-                      f"radius factor x{math.sqrt(math.pi / area):.3f}")
-        else:
-            print(f"    no zones; imperm counts as open: mean velocity x{math.pi / a.ring:.3f}, "
-                  f"radius factor x{math.sqrt(math.pi / a.ring):.3f}")
+        print(f"A{approach} {valve}   a = {sh.area:.5f}   W_t x D_t = {sh.width:.5f} x {sh.depth:.5f}   "
+              f"c = {sh.fill:.5f}   [{ts.ring_source}]")
+        print(f"    extent x [{x0:.5f}, {x1:.5f}]  y [{y0:.5f}, {y1:.5f}]")
+        if a.open is not None:
+            print(f"    zones: perm {a.perm:.4f}  res {a.res:.4f}  (sum {a.open:.4f} = {100 * a.open / sh.area:.1f} % of a)")
+        if ts.imperm_left:
+            print(f"    A{approach}_{valve}_imperm is still in the .blend (counted with res here); "
+                  f"run tools/merge_imperm_into_res.py in Blender 3.1.")
         if show_map and ts.zones:
             for line in ascii_map(ts):
                 print(line)
 
 
 def load_session(path: Path) -> dict:
+    """Valve placement from a session log: translation, angles and the stretch factors (x, y)."""
     s = json.loads(Path(path).read_text(encoding="utf-8"))
     v = s["valves"]
-    out = {
+
+    def stretch(entry: dict, old_keys: Tuple[str, str]) -> Tuple[float, float]:
+        if "stretch_factors" in entry:  # schema 2: sizes in mm plus the stretch factors the build used
+            if entry["stretch_factors"] is None:
+                raise ValueError(f"{path}: no stretch factors logged (the .blend still held imperm templates).")
+            return float(entry["stretch_factors"][0]), float(entry["stretch_factors"][1])
+        return float(entry[old_keys[0]]), float(entry[old_keys[1]])  # schema 1: the radius_* values are stretch factors
+
+    return {
         "MV": {"translation": v["mitral"]["translation_mm"], "angles": v["mitral"]["angle_deg"],
-               "r_long": float(v["mitral"]["radius_long"]), "r_small": float(v["mitral"]["radius_small"])},
+               "stretch": stretch(v["mitral"], ("radius_long", "radius_small"))},
         "AV": {"translation": v["aortic"]["translation_mm"], "angles": v["aortic"]["angle_deg"],
-               "r_long": float(v["aortic"]["radius"]), "r_small": float(v["aortic"]["radius"])},
+               "stretch": stretch(v["aortic"], ("radius", "radius"))},
         "approach": (s.get("pipeline") or {}).get("approach"),
         "time_rr": ((s.get("setup_variables") or {}).get("interpolation") or {}).get("time_rr"),
     }
-    return out
 
 
-def report_export(export: Path, session: dict, templates) -> Dict[str, float]:
+def report_export(export: Path, session: dict, templates) -> Dict[str, vgc.PlaneDisc]:
     section(f"2) Valve discs in the exported geometry ({export})")
     approach = session.get("approach") or 4
-    measured: Dict[str, float] = {}
+    measured: Dict[str, vgc.PlaneDisc] = {}
     files = {"MV": [export / "atrium.stl"], "AV": [export / "aorta.stl"]}
     ventricles = sorted(export.glob("ventricle_*.stl"), key=_natural_key)
     for valve in vgc.VALVES:
         s = session[valve]
         frame = vgc.valve_frame(s["translation"], s["angles"])
-        r_l, r_s = s["r_long"], s["r_small"]
+        sx, sy = s["stretch"]
         ts = templates.get((approach, valve)) or templates.get((4, valve))
-        if ts and ts.ring_points():
-            r_max = 1.05 * max(math.hypot(x * r_l, y * r_s) for x, y in ts.ring_points())
+        if ts:
+            r_max = 1.05 * max(math.hypot(x * sx, y * sy) for x, y in ts.ring_points())
         else:
-            r_max = 1.3 * max(r_l, r_s)
-        tol = 1e-3 * max(r_l, r_s) + 1e-6
-        ellipse = math.pi * r_l * r_s
-        predicted = ts.areas.ring * r_l * r_s if ts else None
-        radii = f"r_long {r_l:g} mm, r_small {r_s:g} mm" if valve == "MV" else f"r {r_l:g} mm"
-        print(f"\n{valve} ({radii}); pi*r*r = {ellipse:.2f} mm2"
+            r_max = 1.3 * max(sx, sy)
+        tol = 1e-3 * max(sx, sy) + 1e-6
+        predicted = ts.shape.area * sx * sy if ts else None
+        print(f"\n{valve} (stretch factors x {sx:g}, y {sy:g})"
               + (f"; template predicts {predicted:.2f} mm2" if predicted else ""))
-        ven_areas = []
+        ven_discs = []
         for path in files[valve] + ventricles:
             if not path.is_file():
                 print(f"    {path.name:18s} missing")
@@ -450,81 +447,86 @@ def report_export(export: Path, session: dict, templates) -> Dict[str, float]:
                 continue
             if vessel and abs(disc.height) > tol:
                 print(f"    {path.name:18s} bottom disc {disc.height:.3f} mm above the valve plane "
-                      f"(A4: top of the porous zones at 0.1 * s_z = {0.1 * (r_l + r_s) / 2:.3f} mm)")
-            if path.name.startswith("ventricle_"):
-                ven_areas.append(disc.area)
-                if len(ven_areas) > 1:
+                      f"(A4: top of the porous zones at 0.1 * s_z = {0.1 * (sx + sy) / 2:.3f} mm)")
+            if not vessel:
+                ven_discs.append(disc)
+                if len(ven_discs) > 1:
                     continue  # all frames share the disc; summarise below
             x0, x1 = disc.x_extent
             y0, y1 = disc.y_extent
-            print(f"    {path.name:18s} {disc.area:8.2f} mm2 = {100 * disc.area / ellipse:5.1f} % of pi*r*r   "
+            pct = f" = {100 * disc.area / predicted:5.1f} % of the prediction" if predicted else ""
+            print(f"    {path.name:18s} {disc.area:8.2f} mm2{pct}   "
                   f"({disc.n_faces} faces; local x [{x0:.2f}, {x1:.2f}], y [{y0:.2f}, {y1:.2f}] mm)")
-        if ven_areas:
-            spread = (max(ven_areas) - min(ven_areas)) / max(ven_areas)
-            print(f"    ventricle discs in {len(ven_areas)} frames: {min(ven_areas):.2f} ... {max(ven_areas):.2f} mm2 "
+        if ven_discs:
+            areas = [d.area for d in ven_discs]
+            spread = (max(areas) - min(areas)) / max(areas)
+            print(f"    ventricle discs in {len(areas)} frames: {min(areas):.2f} ... {max(areas):.2f} mm2 "
                   f"(spread {100 * spread:.3f} %)")
-            measured[valve] = ven_areas[0]
+            measured[valve] = ven_discs[0]
     return measured
 
 
-def report_summary(summary_path: Path, session: Optional[dict], templates, measured: Dict[str, float],
+def report_summary(summary_path: Path, session: Optional[dict], templates, measured: Dict[str, vgc.PlaneDisc],
                    approach: int, t_cfd: Optional[float], t_cfd_source: str) -> None:
     section(f"3) Comparison with A_fit from {summary_path}")
     summary = vgc.read_fit_summary(summary_path)
+    sets = {v: templates.get((approach, v)) or templates.get((4, v)) for v in vgc.VALVES}
+    shapes = {v: ts.shape for v, ts in sets.items()}
     if session:
-        radii = {v: (session[v]["r_long"], session[v]["r_small"]) for v in vgc.VALVES}
-        radii_source = "session log"
+        (sx, sy), (s_av, _) = session["MV"]["stretch"], session["AV"]["stretch"]
+        width, depth, diameter = sx * shapes["MV"].width, sy * shapes["MV"].depth, 2 * s_av
+        sizes_source = "session log"
+    elif not summary.old_format:
+        width, depth, diameter = summary.width_MV_mm, summary.depth_MV_mm, summary.d_AV_mm
+        sizes_source = "summary.csv (no session log given)"
     else:
-        radii = {"MV": (summary.r_MV_major_mm, summary.r_MV_minor_mm), "AV": (summary.r_AV_mm, summary.r_AV_mm)}
-        radii_source = "summary.csv (no session log given)"
+        print("The summary.csv has the old format (no sizes) and no session log is given: nothing to compare.")
+        return
     print(f"A_fit: MV {summary.A_MV_mm2:.2f} mm2, AV {summary.A_AV_mm2:.2f} mm2; bpm_mv {summary.bpm_mv}, "
-          f"bpm_av {summary.bpm_av}")
-    print(f"Radii used for the geometry: {radii_source}")
-    exp, notes = vgc.expected_areas(summary, radii["MV"][0], radii["MV"][1], radii["AV"][0])
+          f"bpm_av {summary.bpm_av}; format {'old' if summary.old_format else 'new'}")
+    print(f"Sizes used for the geometry ({sizes_source}): MV width {width:.3f} mm, depth {depth:.3f} mm, "
+          f"AV diameter {diameter:.3f} mm")
+    exp, notes = vgc.expected_areas(summary, width, depth, diameter, shapes, approach)
     meas = {}
     for v in vgc.VALVES:
-        ts = templates.get((approach, v)) or templates.get((4, v))
-        r_l, r_s = radii[v]
         m = vgc.Measurement(v)
-        if v in measured:
-            m.ring_mm2 = measured[v]
+        disc = measured.get(v)
+        if disc is not None:
+            m.ring_mm2 = disc.area
+            if v == "MV":
+                m.width_mm, m.depth_mm = disc.x_extent[1] - disc.x_extent[0], disc.y_extent[1] - disc.y_extent[0]
             src = "ring measured in the export"
-        elif ts:
-            m.ring_mm2 = ts.areas.ring * r_l * r_s
-            src = "ring predicted from the template"
         else:
-            src = "no ring"
-        if ts and ts.areas.open_fraction is not None and m.ring_mm2 is not None:
-            a = ts.areas
-            tot = a.perm + a.res + a.imperm
-            m.perm_mm2 = m.ring_mm2 * a.perm / tot
-            m.res_mm2 = m.ring_mm2 * a.res / tot
-            m.imperm_mm2 = m.ring_mm2 * a.imperm / tot
-            m.zones_source = f"A{ts.approach} template shares"
+            m.ring_mm2 = exp[v].panel_mm2
+            if v == "MV":
+                m.width_mm, m.depth_mm = width, depth
+            src = "ring predicted from the template"
+        a = sets[v].areas if sets[v] else None
+        if a is not None and a.open:
+            m.perm_mm2 = m.ring_mm2 * a.perm / a.open
+            m.res_mm2 = m.ring_mm2 * a.res / a.open
+            m.zones_source = f"A{sets[v].approach} template shares"
         meas[v] = m
         notes.append(f"{v}: {src}.")
-    for imperm_open in (True, False):
-        rows, ok = vgc.evaluate(meas, exp, imperm_open, 2.0)
-        print()
-        print(vgc.format_report([], [], imperm_open, 2.0)[0])
-        for r in rows:
-            for line in vgc.format_report([r], [], imperm_open, 2.0)[1:]:
-                print(line)
-            if r.radius_factor is None:
-                continue
-            r_l, r_s = radii[r.valve]
-            fac = r.radius_factor
-            if r.valve == "MV":
-                print(f"    -> radii that give the target: long {r_l * fac:.3f} mm, small {r_s * fac:.3f} mm")
-            else:
-                print(f"    -> radius that gives the target: {r_l * fac:.3f} mm")
-            if t_cfd:
-                bpm = summary.bpm_mv if r.valve == "MV" else summary.bpm_av
-                if bpm:
-                    t_d = 60.0 / bpm
-                    print(f"    -> including the cycle duration (T_Doppler {t_d:.3f} s / T_CFD {t_cfd:.3f} s "
-                          f"= {t_d / t_cfd:.3f}{t_cfd_source}): CFD mean velocity / Doppler "
-                          f"x{r.velocity_factor * t_d / t_cfd:.3f}")
+    rows, ok = vgc.evaluate(meas, exp, 2.0)
+    print()
+    for line in vgc.format_report(rows, [], 2.0):
+        print(line)
+    for r in rows:
+        if r.size_factor is None:
+            continue
+        fac = r.size_factor
+        if r.valve == "MV":
+            print(f"    -> MV sizes that give the target: width {width * fac:.3f} mm, depth {depth * fac:.3f} mm")
+        else:
+            print(f"    -> AV diameter that gives the target: {diameter * fac:.3f} mm")
+        if t_cfd:
+            bpm = summary.bpm_mv if r.valve == "MV" else summary.bpm_av
+            if bpm:
+                t_d = 60.0 / bpm
+                print(f"    -> {r.valve} including the cycle duration (T_Doppler {t_d:.3f} s / T_CFD {t_cfd:.3f} s "
+                      f"= {t_d / t_cfd:.3f}{t_cfd_source}): CFD mean velocity / Doppler "
+                      f"x{r.velocity_factor * t_d / t_cfd:.3f}")
     print()
     for n in notes:
         print(f"Note: {n}")
@@ -540,7 +542,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--blend", type=Path, default=REPO / "GVR-Pipeline.blend", help="pipeline .blend with the templates")
     ap.add_argument("--map", action="store_true", help="draw a top view of the zones of each template set")
     ap.add_argument("--export", type=Path, help="export folder with atrium.stl, aorta.stl, ventricle_*.stl")
-    ap.add_argument("--session", type=Path, help="session log JSON (valve position, angles, radii)")
+    ap.add_argument("--session", type=Path, help="session log JSON (valve position, angles, sizes)")
     ap.add_argument("--summary", type=Path, help="calc_valve_diameters_outputs/summary.csv")
     ap.add_argument("--approach", type=int, choices=(3, 4, 5), help="approach for the zone shares (default: session log, else 4)")
     ap.add_argument("--t-cfd", type=float, help="CFD cycle duration in s (default: time_rr from the session log)")
@@ -556,7 +558,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     report_templates(templates, args.map)
 
     session = load_session(args.session) if args.session else None
-    measured: Dict[str, float] = {}
+    measured: Dict[str, vgc.PlaneDisc] = {}
     if args.export:
         if not session:
             print("\n--export needs --session (valve planes and radii).", file=sys.stderr)

@@ -1,24 +1,25 @@
-"""Check that the built valve geometry has the area calculate_valve_diameters.py computed.
+"""Valve sizes of the pipeline, and the check that the built valves have the fitted areas.
 
 calculate_valve_diameters.py fits an effective valve area A_fit from the volume curve and
-the Doppler traces and turns it into radii, assuming a circle (AV, A = pi*r^2) or an
-ellipse (MV, A = pi*r_long*r_small). scale_rotate_translate_object() in
-geometrical_heart_reconstruction.py does not draw a circle or an ellipse with these
-radii. It multiplies the coordinates of a template mesh (A*_MV_Boundary, A*_MV_Surface,
-the porous zones, the atrium, ...) with them. The built area is therefore
-a_template * r_long * r_small, where a_template is the template's area at unit scale.
-For the AV template (a unit circle) a_template is close to pi. For the D-shaped MV
-template it is about 2.56, so the built ring is about 18 % smaller than computed.
-On top of that the *_imperm zone, if it is treated as a wall in the CFD, removes
-about 20 % of the remaining area.
+the Doppler traces. scale_rotate_translate_object() in geometrical_heart_reconstruction.py
+does not draw a circle or an ellipse: it multiplies the coordinates of template meshes
+(A*_MV_Boundary, A*_MV_Surface, the porous zones, the atrium, ...) with stretch factors.
+The built area is therefore a * s_x * s_y, where a is the template's area at unit scale
+(about 2.56 for the D-shaped MV template, 3.12 for the AV template).
 
-This module measures the built geometry and compares it with A_fit.
+This module is the one place that links the two:
+- template_shapes() measures a, the template width W_t and depth D_t in the .blend;
+- mv_size() / av_diameter() turn A_fit into the panel values (MV width and depth with
+  width/depth = R_target, AV diameter), mv_stretch() / av_stretch() turn the panel values
+  into the stretch factors the build uses;
+- run_valve_area_check() measures the built geometry and compares it with A_fit.
 
 Layout:
-- The first part (geometry helpers, summary.csv reader, evaluation, report) is free of
-  bpy and numpy. tools/valve_area_diagnosis.py imports it outside Blender, so both
-  front ends compute exactly the same thing.
-- run_valve_area_check() at the bottom is the Blender front end. It imports bpy lazily.
+- Everything except the Blender front end is free of bpy and numpy.
+  tools/valve_area_diagnosis.py and calculate_valve_diameters.py import it outside Blender, so
+  all of them compute exactly the same thing.
+- The Blender front end (template_shapes(), run_valve_area_check()) at the bottom gets bpy
+  passed in or imports it lazily.
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ Vec = Tuple[float, float, float]
 
 VALVES = ("MV", "AV")
 VALVE_MODE = {"MV": "Mitral", "AV": "Aortic"}
-ZONE_TYPES = ("perm", "res", "imperm")
+ZONE_TYPES = ("perm", "res")  # imperm is merged into res (ADR 0001)
 
 
 # -----------------------------------------------------------------------------
@@ -84,7 +85,7 @@ class ValveFrame:
     """Local valve frame: origin = valve translation, columns of `rot` = local axes in world.
 
     Local z is the valve normal (the template's z axis), local x is the template's x axis,
-    which scale_rotate_translate_object() scales with the long mitral radius.
+    which scale_rotate_translate_object() multiplies with the MV width stretch factor.
     """
     origin: Vec
     rot: List[List[float]]
@@ -306,16 +307,85 @@ def order_edge_loop(edges: Sequence[Tuple[int, int]]) -> List[int]:
 
 
 # -----------------------------------------------------------------------------
+# Valve sizes: the one place that links A_fit, the panel values and the stretch factors
+# -----------------------------------------------------------------------------
+
+RATIO_BAND = (1.15, 1.35)  # plausible MV width/depth (healthy adults); outside it the panel and the check warn
+MERGE_HINT = ("Run tools/merge_imperm_into_res.py once in Blender 3.1 (see README, 'Merge imperm into res'), "
+              "then save the .blend.")
+
+
+@dataclass(frozen=True)
+class TemplateShape:
+    """Outline of a valve template at unit scale (A{n}_{MV,AV}_Boundary).
+
+    area is the flow opening area at factor 1 (A3/A4 and all AV: the whole disc).
+    A5 MV: also the disc for now; scaling the opening of the open leaflets (backlog P13) goes here.
+    """
+    area: float   # a
+    width: float  # W_t, extent in template x (commissure to commissure for the MV)
+    depth: float  # D_t, extent in template y (antero-posterior)
+
+    @property
+    def fill(self) -> float:
+        """c = a / (W_t * D_t): built MV area = c * width * depth."""
+        return self.area / (self.width * self.depth)
+
+
+def _shape(points: Sequence[Sequence[float]], area: float) -> TemplateShape:
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return TemplateShape(area, max(xs) - min(xs), max(ys) - min(ys))
+
+
+def shape_from_loop(verts: Sequence[Sequence[float]], edges: Sequence[Tuple[int, int]]) -> TemplateShape:
+    """Shape of a closed edge loop (the *_Boundary templates). Raises ValueError if it is no single loop."""
+    pts = [verts[i] for i in order_edge_loop(edges)]
+    return _shape(pts, polygon_area_xy(pts))
+
+
+def shape_from_faces(verts: Sequence[Sequence[float]], faces: Sequence[Sequence[int]]) -> TemplateShape:
+    """Shape of a flat disc (the *_Surface templates), the fallback if the boundary is no single loop."""
+    used = sorted({i for f in faces for i in f})
+    return _shape([verts[i] for i in used], projected_faces_area(verts, faces, (0.0, 0.0, 1.0)))
+
+
+def mv_size(a_fit: float, shape: TemplateShape, ratio: float) -> Tuple[float, float]:
+    """(width, depth) of the MV whose built area is a_fit and whose width/depth is ratio."""
+    depth = math.sqrt(a_fit / (shape.fill * ratio))
+    return ratio * depth, depth
+
+
+def av_diameter(a_fit: float, shape: TemplateShape) -> float:
+    """Diameter of the AV whose built area is a_fit (the AV template has circumradius 1)."""
+    return 2.0 * math.sqrt(a_fit / shape.area)
+
+
+def mv_stretch(width: float, depth: float, shape: TemplateShape) -> Vec:
+    """Stretch factors (x, y, z) that build the MV with this width and depth; z as the pipeline always did."""
+    sx, sy = width / shape.width, depth / shape.depth
+    return sx, sy, (sx + sy) / 2.0
+
+
+def av_stretch(diameter: float) -> Vec:
+    s = diameter / 2.0
+    return s, s, s
+
+
+def ratio_in_band(ratio: float) -> bool:
+    return RATIO_BAND[0] <= ratio <= RATIO_BAND[1]
+
+
+# -----------------------------------------------------------------------------
 # Template coefficients
 # -----------------------------------------------------------------------------
 
 @dataclass
 class TemplateAreas:
-    """Areas of one valve template set at unit scale (radii = 1)."""
-    ring: float                      # area of the full valve disc (= perm + res + imperm)
+    """Areas of one valve template set at unit scale."""
+    ring: float                      # area of the full valve disc (= perm + res)
     perm: Optional[float] = None
     res: Optional[float] = None
-    imperm: Optional[float] = None
 
     @property
     def open(self) -> Optional[float]:
@@ -323,17 +393,9 @@ class TemplateAreas:
             return None
         return self.perm + self.res
 
-    @property
-    def open_fraction(self) -> Optional[float]:
-        zones = (self.perm, self.res, self.imperm)
-        if any(z is None for z in zones):
-            return None
-        total = sum(zones)
-        return (self.perm + self.res) / total if total > 0 else None
-
 
 # -----------------------------------------------------------------------------
-# Expected values: summary.csv of calculate_valve_diameters.py and GUI radii
+# Expected values: summary.csv of calculate_valve_diameters.py and the panel values
 # -----------------------------------------------------------------------------
 
 @dataclass
@@ -342,11 +404,17 @@ class FitSummary:
     case_path: str
     A_MV_mm2: float
     A_AV_mm2: float
-    r_MV_minor_mm: float
-    r_MV_major_mm: float
-    r_AV_mm: float
     bpm_mv: Optional[float]
     bpm_av: Optional[float]
+    approach: Optional[int] = None
+    R_target: Optional[float] = None
+    width_MV_mm: Optional[float] = None  # None in the old format (radii instead of sizes)
+    depth_MV_mm: Optional[float] = None
+    d_AV_mm: Optional[float] = None
+
+    @property
+    def old_format(self) -> bool:
+        return self.width_MV_mm is None
 
 
 def _float(row: Dict[str, str], key: str) -> Optional[float]:
@@ -363,28 +431,36 @@ def _float(row: Dict[str, str], key: str) -> Optional[float]:
 def read_fit_summary(path: Path) -> FitSummary:
     """Read calc_valve_diameters_outputs/summary.csv (SI units) and convert to mm / mm^2.
 
-    A_AV is negative in that file (the AV Doppler trace is negative), so |A| is used.
+    Column names may carry their unit ('A_MV [m^2]') or not (old files). Old files store A_AV
+    negative (Doppler sign convention), so |A| is used.
     """
     path = Path(path)
     with path.open(newline="", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
+        rows = [{k.split(" [")[0].strip(): v for k, v in r.items() if k} for r in csv.DictReader(fh)]
     if not rows:
         raise ValueError(f"{path} contains no data row")
     row = rows[-1]
-    needed = ("A_MV", "A_AV", "r_MV_minor", "r_MV_major", "r_AV")
-    missing = [k for k in needed if _float(row, k) is None]
+    missing = [k for k in ("A_MV", "A_AV") if _float(row, k) is None]
     if missing:
         raise ValueError(f"{path} lacks valid values for {missing}")
+
+    def mm(key: str) -> Optional[float]:
+        v = _float(row, key)
+        return None if v is None else v * 1e3
+
+    approach = _float(row, "approach")
     return FitSummary(
         path=path,
         case_path=(row.get("path") or "").strip(),
         A_MV_mm2=abs(_float(row, "A_MV")) * 1e6,
         A_AV_mm2=abs(_float(row, "A_AV")) * 1e6,
-        r_MV_minor_mm=_float(row, "r_MV_minor") * 1e3,
-        r_MV_major_mm=_float(row, "r_MV_major") * 1e3,
-        r_AV_mm=_float(row, "r_AV") * 1e3,
         bpm_mv=_float(row, "bpm_mv"),
         bpm_av=_float(row, "bpm_av"),
+        approach=None if approach is None else int(approach),
+        R_target=_float(row, "R_target"),
+        width_MV_mm=mm("width_MV"),
+        depth_MV_mm=mm("depth_MV"),
+        d_AV_mm=mm("d_AV"),
     )
 
 
@@ -393,45 +469,52 @@ class Expectation:
     valve: str
     target_mm2: float
     source: str                 # where target_mm2 comes from
-    gui_ellipse_mm2: float      # pi * r_long * r_small (MV) or pi * r^2 (AV) from the radii used
+    panel_mm2: float            # area the panel values stand for (c*width*depth, a*(d/2)^2)
+    stretch: Vec                # stretch factors the build uses for the panel values
 
 
 def _norm_path(p: str) -> str:
     return str(p).replace("\\", "/").rstrip("/").lower()
 
 
-def expected_areas(summary: Optional[FitSummary], r_mv_long: float, r_mv_small: float, r_av: float,
-                   case_dir: Optional[Path] = None, radius_tol: float = 0.005
+def expected_areas(summary: Optional[FitSummary], width: float, depth: float, diameter: float,
+                   shapes: Dict[str, TemplateShape], approach: Optional[int] = None,
+                   case_dir: Optional[Path] = None, size_tol: float = 0.005
                    ) -> Tuple[Dict[str, Expectation], List[str]]:
     """Target area per valve plus notes.
 
-    The target is A_fit from summary.csv when available, otherwise the area the GUI radii
-    stand for in calculate_valve_diameters.py (pi*r_long*r_small, pi*r^2).
+    The target is A_fit from summary.csv when available, otherwise the area the panel values
+    stand for with the measured templates.
     """
     notes: List[str] = []
-    gui = {"MV": math.pi * r_mv_long * r_mv_small, "AV": math.pi * r_av * r_av}
+    panel = {"MV": shapes["MV"].fill * width * depth, "AV": shapes["AV"].area * (diameter / 2.0) ** 2}
+    stretch = {"MV": mv_stretch(width, depth, shapes["MV"]), "AV": av_stretch(diameter)}
     exp: Dict[str, Expectation] = {}
     if summary is None:
         for v in VALVES:
-            exp[v] = Expectation(v, gui[v], "GUI radii (no summary.csv)", gui[v])
-        notes.append("No summary.csv found: the target is the area the GUI radii stand for "
-                     "(pi*r_long*r_small, pi*r^2), not a fitted area.")
+            exp[v] = Expectation(v, panel[v], "panel values (no summary.csv)", panel[v], stretch[v])
+        notes.append("No summary.csv found: the target is the area the panel values stand for "
+                     "(c * width * depth, a * (d/2)^2), not a fitted area.")
         return exp, notes
 
-    exp["MV"] = Expectation("MV", summary.A_MV_mm2, "summary.csv (A_fit)", gui["MV"])
-    exp["AV"] = Expectation("AV", summary.A_AV_mm2, "summary.csv (A_fit)", gui["AV"])
+    exp["MV"] = Expectation("MV", summary.A_MV_mm2, "summary.csv (A_fit)", panel["MV"], stretch["MV"])
+    exp["AV"] = Expectation("AV", summary.A_AV_mm2, "summary.csv (A_fit)", panel["AV"], stretch["AV"])
 
-    def differs(a: float, b: float) -> bool:
-        return abs(a - b) > radius_tol * max(abs(b), 1e-12)
-
-    pairs = [("MV long radius", r_mv_long, summary.r_MV_major_mm),
-             ("MV small radius", r_mv_small, summary.r_MV_minor_mm),
-             ("AV radius", r_av, summary.r_AV_mm)]
-    diffs = [f"{name} {used:.3f} mm vs. {fit:.3f} mm" for name, used, fit in pairs if differs(used, fit)]
-    if diffs:
-        notes.append("The radii used for the geometry differ from summary.csv (" + "; ".join(diffs)
-                     + "). Either they were changed by hand after 'Calculate Radii' or the summary "
-                     "belongs to another case.")
+    if summary.old_format:
+        notes.append("summary.csv has the old format (radii, no width/depth/diameter): only A_fit is used. "
+                     "Run 'Calculate Radii' again.")
+    else:
+        pairs = [("MV width", width, summary.width_MV_mm), ("MV depth", depth, summary.depth_MV_mm),
+                 ("AV diameter", diameter, summary.d_AV_mm)]
+        diffs = [f"{name} {used:.3f} mm vs. {fit:.3f} mm" for name, used, fit in pairs
+                 if fit is not None and abs(used - fit) > size_tol * max(abs(fit), 1e-12)]
+        if diffs:
+            notes.append("The panel values differ from summary.csv (" + "; ".join(diffs)
+                         + "). Either they were changed by hand after 'Calculate Radii' or the summary "
+                         "belongs to another case.")
+        if approach is not None and summary.approach is not None and summary.approach != approach:
+            notes.append(f"summary.csv was computed for approach A{summary.approach}, the scene uses "
+                         f"A{approach}. Run 'Calculate Radii' again.")
     if case_dir is not None and summary.case_path and _norm_path(summary.case_path) != _norm_path(case_dir):
         notes.append(f"summary.csv was written for '{summary.case_path}', the current case folder is "
                      f"'{case_dir}'.")
@@ -448,12 +531,13 @@ class Measurement:
     ring_mm2: Optional[float] = None          # full valve disc as built
     perm_mm2: Optional[float] = None
     res_mm2: Optional[float] = None
-    imperm_mm2: Optional[float] = None
     zones_source: str = "n/a"                  # "zone objects", "template estimate", "n/a"
     frame: Optional[ValveFrame] = None         # valve plane the zones were measured in
     zone_height_mm: Optional[float] = None     # height of the zone objects above the valve plane
     n_frames: int = 0                          # ventricle frames the ring was measured in
     frame_spread: float = 0.0                  # (max - min) / max of the ring area over the frames
+    width_mm: Optional[float] = None           # MV disc extent in the valve frame of the scene (x)
+    depth_mm: Optional[float] = None           # ... and in y
     notes: List[str] = field(default_factory=list)
 
     @property
@@ -468,16 +552,17 @@ class Row:
     valve: str
     target_mm2: float
     target_source: str
-    gui_ellipse_mm2: float
+    panel_mm2: float
+    stretch: Vec
     ring_mm2: Optional[float]
     open_mm2: Optional[float]
-    imperm_mm2: Optional[float]
     zones_source: str
-    checked: str                  # "ring" or "perm+res"
-    checked_mm2: Optional[float]
+    checked_mm2: Optional[float]  # perm+res, the disc if no zones are known
     status: str                   # "OK", "WARN", "n/a"
     n_frames: int = 0
     frame_spread: float = 0.0
+    width_mm: Optional[float] = None
+    depth_mm: Optional[float] = None
 
     def pct(self, area: Optional[float]) -> Optional[float]:
         return None if area is None or self.target_mm2 <= 0 else 100.0 * area / self.target_mm2
@@ -490,14 +575,19 @@ class Row:
         return self.target_mm2 / self.checked_mm2
 
     @property
-    def radius_factor(self) -> Optional[float]:
-        """Factor for both GUI radii of this valve that makes the checked area equal the target."""
+    def size_factor(self) -> Optional[float]:
+        """Factor for width and depth (MV) or the diameter (AV) that makes the checked area equal the target."""
         vf = self.velocity_factor
         return None if vf is None else math.sqrt(vf)
 
+    @property
+    def ratio(self) -> Optional[float]:
+        return self.width_mm / self.depth_mm if self.width_mm and self.depth_mm else None
+
 
 def evaluate(measurements: Dict[str, Measurement], expectations: Dict[str, Expectation],
-             imperm_open: bool, tol_percent: float) -> Tuple[List[Row], bool]:
+             tol_percent: float) -> Tuple[List[Row], bool]:
+    """Rows per valve; ok is False if an area is outside the tolerance or the MV width/depth outside RATIO_BAND."""
     rows: List[Row] = []
     ok = True
     for v in VALVES:
@@ -505,18 +595,16 @@ def evaluate(measurements: Dict[str, Measurement], expectations: Dict[str, Expec
         e = expectations.get(v)
         if m is None or e is None:
             continue
-        if imperm_open:
-            checked, area = "ring", m.ring_mm2
-        else:
-            checked, area = "perm+res", m.open_mm2
+        area = m.open_mm2 if m.open_mm2 is not None else m.ring_mm2
         if area is None or e.target_mm2 <= 0:
             status = "n/a"
         else:
             status = "OK" if abs(area / e.target_mm2 - 1.0) * 100.0 <= tol_percent else "WARN"
-        if status == "WARN":
+        row = Row(v, e.target_mm2, e.source, e.panel_mm2, e.stretch, m.ring_mm2, m.open_mm2, m.zones_source,
+                  area, status, m.n_frames, m.frame_spread, m.width_mm, m.depth_mm)
+        if status == "WARN" or (row.ratio is not None and not ratio_in_band(row.ratio)):
             ok = False
-        rows.append(Row(v, e.target_mm2, e.source, e.gui_ellipse_mm2, m.ring_mm2, m.open_mm2,
-                        m.imperm_mm2, m.zones_source, checked, area, status, m.n_frames, m.frame_spread))
+        rows.append(row)
     return rows, ok
 
 
@@ -524,11 +612,10 @@ def _fmt(val: Optional[float], spec: str = ".2f", suffix: str = "") -> str:
     return "-" if val is None else f"{val:{spec}}{suffix}"
 
 
-def format_report(rows: Sequence[Row], notes: Sequence[str], imperm_open: bool,
-                  tol_percent: float) -> List[str]:
+def format_report(rows: Sequence[Row], notes: Sequence[str], tol_percent: float) -> List[str]:
     """Console lines: one block per valve, then notes."""
-    lines = [f"Reference: {'full ring (imperm counts as open)' if imperm_open else 'perm+res (imperm is a wall)'}, "
-             f"tolerance +-{tol_percent:g} % area"]
+    lines = [f"Reference: perm+res (imperm is part of res), tolerance +-{tol_percent:g} % area, "
+             f"MV width/depth {RATIO_BAND[0]:g} to {RATIO_BAND[1]:g}"]
     for r in rows:
         lines.append(f"{r.valve}: target {r.target_mm2:.2f} mm2 [{r.target_source}]  ->  {r.status}")
         frames = ""
@@ -539,12 +626,18 @@ def format_report(rows: Sequence[Row], notes: Sequence[str], imperm_open: bool,
             frames += ")"
         lines.append(f"    ring      {_fmt(r.ring_mm2)} mm2 = {_fmt(r.pct(r.ring_mm2), '.1f', ' %')} of target{frames}")
         lines.append(f"    perm+res  {_fmt(r.open_mm2)} mm2 = {_fmt(r.pct(r.open_mm2), '.1f', ' %')} of target"
-                     f"   (imperm {_fmt(r.imperm_mm2)} mm2, zones: {r.zones_source})")
+                     f"   (zones: {r.zones_source})")
         if r.velocity_factor is not None:
-            lines.append(f"    checked area '{r.checked}': mean velocity x{r.velocity_factor:.3f} at equal flow; "
-                         f"radius factor to match the target x{r.radius_factor:.3f}")
-        if abs(r.gui_ellipse_mm2 - r.target_mm2) > 1e-9 * max(r.target_mm2, 1.0):
-            lines.append(f"    (the radii used stand for {r.gui_ellipse_mm2:.2f} mm2 in calculate_valve_diameters.py)")
+            lines.append(f"    mean velocity x{r.velocity_factor:.3f} at equal flow; "
+                         f"size factor to match the target x{r.size_factor:.3f}")
+        if r.ratio is not None:
+            band = "" if ratio_in_band(r.ratio) else f" outside {RATIO_BAND[0]:g} to {RATIO_BAND[1]:g} -> WARN"
+            if r.ratio < 1.0:
+                band += " (width and depth swapped?)"
+            lines.append(f"    width {r.width_mm:.2f} mm, depth {r.depth_mm:.2f} mm, width/depth {r.ratio:.2f}{band}")
+        sx, sy, sz = r.stretch
+        lines.append(f"    stretch factors x {sx:.3f}, y {sy:.3f}, z {sz:.3f}; "
+                     f"the panel values stand for {r.panel_mm2:.2f} mm2")
     for n in notes:
         lines.append(f"Note: {n}")
     return lines
@@ -582,19 +675,49 @@ def _find_object(bpy, name: str):
     return None
 
 
+class TemplateError(RuntimeError):
+    """The valve templates in the .blend cannot be used (imperm not merged, outline missing)."""
+
+
+def template_shapes(bpy, approach: int) -> Dict[str, TemplateShape]:
+    """MV and AV template outline of an approach, measured in the .blend.
+
+    The one place Calculate Radii, the build (get_valve_data) and the check take the template
+    sizes from. Raises TemplateError while any A{n}_*_imperm template is left: the build copies
+    only perm and res, so the zones would miss their outer band.
+    """
+    left = [n for n in (f"A{a}_{v}_imperm" for a in (3, 4, 5) for v in VALVES) if bpy.data.objects.get(n) is not None]
+    if left:
+        raise TemplateError(f"The .blend still holds the imperm templates {', '.join(left)}. {MERGE_HINT}")
+    shapes = {}
+    for v in VALVES:
+        boundary = bpy.data.objects.get(f"A{approach}_{v}_Boundary")
+        surface = bpy.data.objects.get(f"A{approach}_{v}_Surface")
+        try:
+            if boundary is None:
+                raise ValueError("missing")
+            shapes[v] = shape_from_loop([tuple(p.co) for p in boundary.data.vertices],
+                                        [tuple(e.vertices) for e in boundary.data.edges])
+        except ValueError:
+            if surface is None:
+                raise TemplateError(f"Template A{approach}_{v}_Boundary is missing or not a single edge loop, "
+                                    f"and A{approach}_{v}_Surface is missing.")
+            shapes[v] = shape_from_faces([tuple(p.co) for p in surface.data.vertices],
+                                         [tuple(p.vertices) for p in surface.data.polygons])
+    return shapes
+
+
 def _template_areas(bpy, approach: int, valve: str) -> Optional[TemplateAreas]:
     """Unit-scale zone areas of the templates shipped in the .blend (used for the A3 estimate)."""
-    names = {z: f"A{approach}_{valve}_{z}" for z in ZONE_TYPES}
     areas = {}
-    for z, n in names.items():
-        obj = bpy.data.objects.get(n)
+    for z in ZONE_TYPES:
+        obj = bpy.data.objects.get(f"A{approach}_{valve}_{z}")
         if obj is None or obj.type != 'MESH':
             return None
         verts = [tuple(v.co) for v in obj.data.vertices]  # mesh data: unit scale, template frame
         faces = [tuple(p.vertices) for p in obj.data.polygons]
         areas[z] = bottom_faces_area(verts, faces, UNIT_FRAME)
-    total = sum(areas.values())
-    return TemplateAreas(total, areas["perm"], areas["res"], areas["imperm"])
+    return TemplateAreas(sum(areas.values()), areas["perm"], areas["res"])
 
 
 def _measure_valve(bpy, scene, valve: str, ventricles) -> Measurement:
@@ -616,6 +739,11 @@ def _measure_valve(bpy, scene, valve: str, ventricles) -> Measurement:
         if frame is None:
             origin, normal = plane_from_faces(verts, faces)
             frame = frame_from_normal(origin, normal)
+            if valve == "MV":  # extent in the frame the build placed the template in (local x/y = template x/y)
+                scene_frame = valve_frame(scene.translation_mitral, scene.angle_mitral)
+                loc = [scene_frame.to_local(verts[i]) for f in faces for i in f]
+                m.width_mm = max(p[0] for p in loc) - min(p[0] for p in loc)
+                m.depth_mm = max(p[1] for p in loc) - min(p[1] for p in loc)
     if rings:
         areas = [a for _, a, _ in rings]
         m.ring_mm2 = areas[0]
@@ -647,7 +775,7 @@ def _measure_valve(bpy, scene, valve: str, ventricles) -> Measurement:
             vals[z] = bottom_faces_area(verts, faces, frame)
             heights.append(zone_height(verts, faces, frame))
         m.zone_height_mm = max(heights)
-        m.perm_mm2, m.res_mm2, m.imperm_mm2 = vals["perm"], vals["res"], vals["imperm"]
+        m.perm_mm2, m.res_mm2 = vals["perm"], vals["res"]
         m.zones_source = "zone objects"
         if m.ring_mm2:
             total = sum(vals.values())
@@ -660,11 +788,9 @@ def _measure_valve(bpy, scene, valve: str, ventricles) -> Measurement:
         tmpl = _template_areas(bpy, approach, valve)
         if tmpl is None and approach != 4:
             tmpl, source = _template_areas(bpy, 4, valve), "A4"
-        if tmpl is not None and tmpl.open_fraction is not None:
-            total = tmpl.perm + tmpl.res + tmpl.imperm
-            m.perm_mm2 = m.ring_mm2 * tmpl.perm / total
-            m.res_mm2 = m.ring_mm2 * tmpl.res / total
-            m.imperm_mm2 = m.ring_mm2 * tmpl.imperm / total
+        if tmpl is not None and tmpl.ring > 0:
+            m.perm_mm2 = m.ring_mm2 * tmpl.perm / tmpl.ring
+            m.res_mm2 = m.ring_mm2 * tmpl.res / tmpl.ring
             m.zones_source = f"estimated from {source} templates"
     return m
 
@@ -702,17 +828,19 @@ def _disc_info(bpy, name: str, m: Measurement) -> Optional[str]:
 
 
 def run_valve_area_check(context, ventricles) -> Tuple[bool, List[str], str]:
-    """Measure the built valves and compare them with summary.csv / the GUI radii.
+    """Measure the built valves and compare them with summary.csv / the panel values.
 
     Returns (ok, console_lines, short_message). ok is False if a checked area is outside the
-    tolerance. Never raises for missing data; it reports it instead.
+    tolerance or the MV width/depth outside RATIO_BAND. Never raises for missing data; it
+    reports it instead. Raises TemplateError while imperm templates are left in the .blend.
     """
     import os
     import warnings
     import bpy  # noqa: F401  (only available inside Blender)
 
     scene = context.scene
-    imperm_open = bool(getattr(scene, "valve_check_imperm_open", True))
+    approach = int(getattr(scene, "approach", 4))
+    shapes = template_shapes(bpy, approach)  # raises TemplateError while imperm templates are left
     tol = float(getattr(scene, "valve_check_tolerance", 2.0))
     notes: List[str] = []
 
@@ -751,15 +879,16 @@ def run_valve_area_check(context, ventricles) -> Tuple[bool, List[str], str]:
     else:
         notes.append("Import folder not set or missing; summary.csv cannot be located.")
 
-    expectations, exp_notes = expected_areas(summary, scene.mitral_radius_long, scene.mitral_radius_small,
-                                             scene.aortic_radius, case_dir)
+    expectations, exp_notes = expected_areas(summary, scene.mitral_width, scene.mitral_depth,
+                                             scene.aortic_diameter, shapes, approach, case_dir)
     notes = exp_notes + notes
-    rows, ok = evaluate(measurements, expectations, imperm_open, tol)
-    lines = format_report(rows, notes, imperm_open, tol)
-    warn = [r.valve for r in rows if r.status == "WARN"]
-    if warn:
-        short = (f"Valve area check: {', '.join(warn)} outside +-{tol:g} % of the target area "
-                 f"(see System Console).")
+    rows, ok = evaluate(measurements, expectations, tol)
+    lines = format_report(rows, notes, tol)
+    problems = [f"{r.valve} outside +-{tol:g} % of the target area" for r in rows if r.status == "WARN"]
+    problems += [f"MV width/depth {r.ratio:.2f} outside {RATIO_BAND[0]:g} to {RATIO_BAND[1]:g}"
+                 for r in rows if r.ratio is not None and not ratio_in_band(r.ratio)]
+    if problems:
+        short = f"Valve area check: {'; '.join(problems)} (see System Console)."
     else:
         short = "Valve area check: all checked valve areas within tolerance."
     return ok, lines, short
