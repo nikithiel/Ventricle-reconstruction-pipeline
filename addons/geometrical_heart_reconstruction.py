@@ -2240,10 +2240,6 @@ class PANEL_Valves(bpy.types.Panel):
         row.prop(context.scene, 'angle_aortic', text="Angle")
         row = layout.row()
         row.prop(context.scene, 'aortic_diameter', text="AV diameter (mm)", icon='META_BALL')
-        row = layout.row()
-        row.label(text= "Valve area check")
-        row = layout.row()
-        row.prop(context.scene, 'valve_check_tolerance', text="Tolerance")
         if dev_env_tools:
             # Calculate Valve Radii
             row = layout.row()
@@ -2254,6 +2250,13 @@ class PANEL_Valves(bpy.types.Panel):
             layout.operator('heart.build_valve',  text= "Add valve interface nodes", icon = 'PROP_OFF')
             row = layout.row()
             layout.operator('heart.support_struct',  text= "Build support structure around valves", icon = 'PROP_ON')
+        row = layout.row()
+        row.label(text= "Valve area check")
+        row = layout.row()
+        row.prop(context.scene, 'valve_check_tolerance', text="Tolerance")
+        if dev_env_tools: # The check operator is a development tool; Quick reconstruction runs the check anyway.
+            row = layout.row()
+            row.operator('heart.check_valve_areas', text= "Check valve areas", icon = 'MESH_CIRCLE')
                 
 class PANEL_Poisson(bpy.types.Panel): 
     bl_label = "Poisson Surface Reconstruction"
@@ -2371,8 +2374,6 @@ class PANEL_Dev_tools(bpy.types.Panel):
         layout.operator('heart.dev_check_edges', text= "Get edge index", icon = 'ARROW_LEFTRIGHT')
         row = layout.row()
         layout.operator('heart.dev_check_node_connectivity', text= "Node-connectivity check", icon = 'MOD_PARTICLES') 
-        row = layout.row()
-        layout.operator('heart.check_valve_areas', text= "Check valve areas", icon = 'MESH_CIRCLE')
         # Color minimal distance button
         row = layout.row()
         layout.operator('heart.color_min_dist', text= "Color minimal distance to raw object", icon = 'COLORSET_04_VEC') 
