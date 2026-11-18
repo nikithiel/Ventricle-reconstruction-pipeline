@@ -401,7 +401,7 @@ def main() -> int:
         text = "\n".join(lines)
         check(ok and "MV: target 107.38 mm2 [summary.csv (A_fit)]  ->  OK" in text
               and "AV: target 36.20 mm2 [summary.csv (A_fit)]  ->  OK" in text, "old format: A_fit read, |A_AV| used")
-        check("summary.csv has the old format" in text and "Run 'Calculate Radii' again" in text
+        check("summary.csv has the old format" in text and "Run 'Calculate valve sizes' again" in text
               and "differ from summary.csv" not in text, "old format: note, no comparison with the panel")
 
         print("-- T2 summary.csv computed for another approach")

@@ -519,7 +519,7 @@ def expected_areas(summary: Optional[FitSummary], panel: ValveSizes,
 
     if summary.old_format:
         notes.append("summary.csv has the old format (radii, no width/depth/diameter): only A_fit is used. "
-                     "Run 'Calculate Radii' again.")
+                     "Run 'Calculate valve sizes' again.")
     else:
         fit = summary.sizes_mm
         pairs = [("MV width", panel.width_MV, fit.width_MV), ("MV depth", panel.depth_MV, fit.depth_MV),
@@ -528,11 +528,11 @@ def expected_areas(summary: Optional[FitSummary], panel: ValveSizes,
                  if abs(used - f) > size_tol * max(abs(f), 1e-12)]
         if diffs:
             notes.append("The panel values differ from summary.csv (" + "; ".join(diffs)
-                         + "). Either they were changed by hand after 'Calculate Radii' or the summary "
+                         + "). Either they were changed by hand after 'Calculate valve sizes' or the summary "
                          "belongs to another case.")
         if approach is not None and summary.approach is not None and summary.approach != approach:
             notes.append(f"summary.csv was computed for approach A{summary.approach}, the scene uses "
-                         f"A{approach}. Run 'Calculate Radii' again.")
+                         f"A{approach}. Run 'Calculate valve sizes' again.")
     if case_dir is not None and summary.case_path and _norm_path(summary.case_path) != _norm_path(case_dir):
         notes.append(f"summary.csv was written for '{summary.case_path}', the current case folder is "
                      f"'{case_dir}'.")
@@ -704,7 +704,7 @@ class TemplateError(RuntimeError):
 def template_shapes(bpy, approach: int) -> Dict[str, TemplateShape]:
     """MV and AV template outline of an approach, measured in the .blend.
 
-    The one place Calculate Radii, the build (get_valve_data) and the check take the template
+    The one place Calculate valve sizes, the build (get_valve_data) and the check take the template
     sizes from. Raises TemplateError while any A{n}_*_imperm template is left: the build copies
     only perm and res, so the zones would miss their outer band.
     """
@@ -874,7 +874,7 @@ def run_valve_area_check(context, ventricles) -> Tuple[bool, List[str], str]:
         if info:
             notes.append(info)
 
-    # Target: summary.csv of the case the import folder belongs to (as 'Calculate Radii' resolves it).
+    # Target: summary.csv of the case the import folder belongs to (as 'Calculate valve sizes' resolves it).
     summary = None
     case_dir = None
     raw_dir = (getattr(scene, "ventricle_import_dir", "") or "").strip()

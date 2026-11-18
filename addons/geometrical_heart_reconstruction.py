@@ -1822,7 +1822,7 @@ def report_valve_areas(operator, context, ventricles):
     return ok
 
 class MESH_OT_check_valve_areas(bpy.types.Operator):
-    """Compare the built mitral and aortic valve areas with the areas fitted by 'Calculate Radii' (summary.csv)"""
+    """Compare the built mitral and aortic valve areas with the areas fitted by 'Calculate valve sizes' (summary.csv)"""
     bl_idname = 'heart.check_valve_areas'
     bl_label = 'Check valve areas'
     def execute(self, context):
@@ -1858,7 +1858,7 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
             cons_print(error)
             self.report({'ERROR'}, error)
             return {'CANCELLED'}
-        report_valve_areas(self, context, ventricles) # Warn only if the built valve areas differ from 'Calculate Radii'.
+        report_valve_areas(self, context, ventricles) # Warn only if the built valve areas differ from 'Calculate valve sizes'.
         return{'FINISHED'} 
 
 def cleanup_basal_region(context):
@@ -2241,9 +2241,9 @@ class PANEL_Valves(bpy.types.Panel):
         row = layout.row()
         row.prop(context.scene, 'aortic_diameter', text="AV diameter (mm)", icon='META_BALL')
         if dev_env_tools:
-            # Calculate Valve Radii
+            # Calculate valve sizes
             row = layout.row()
-            row.operator('heart.calculate_valve_diameter', text = "Calculate Radii", icon = "MESH_CIRCLE")
+            row.operator('heart.calculate_valve_diameter', text = "Calculate valve sizes", icon = "MESH_CIRCLE")
             row = layout.row()
             row.prop(context.scene, 'valve_R_target', text="R_target")
             row = layout.row()
@@ -3023,12 +3023,12 @@ class MESH_OT_save_plot_STL(bpy.types.Operator):
         return{'FINISHED'}
 
 class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
-    """Calculates Valve Diameter"""
+    """Fit the valve areas from the Doppler curves and set MV width, MV depth and AV diameter"""
     bl_idname = 'heart.calculate_valve_diameter'
-    bl_label = 'Calculate Valve Diameter'
+    bl_label = 'Calculate valve sizes'
     
     def execute(self,context):
-        _cons_rule("Calculate valve radii")
+        _cons_rule("Calculate valve sizes")
         scene = context.scene
 
         # No silent fallback to '//': an unset import folder used to resolve to the
@@ -3036,7 +3036,7 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
         raw_dir = (scene.ventricle_import_dir or "").strip()
         import_dir = bpy.path.abspath(raw_dir) if raw_dir else ""
         if not os.path.isdir(import_dir):
-            msg = ("Calculate radii: set the 'Import folder' to the folder holding the "
+            msg = ("Calculate valve sizes: set the 'Import folder' to the folder holding the "
                    f"numbered ventricle STL frames (current value: '{raw_dir or '<empty>'}').")
             cons_print(msg)
             self.report({'ERROR'}, msg)
@@ -3045,7 +3045,7 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
         shapes = valve_template_shapes(self, context) # Template outlines of the current approach; stops while imperm is left.
         if shapes is None: return {'CANCELLED'}
 
-        cons_print(f"Calculating valve radii from: {import_dir}")
+        cons_print(f"Calculating valve sizes from: {import_dir}")
 
         try:
             # calculate_valve_diameters is bpy-free and reports through warnings.warn,
@@ -3058,7 +3058,7 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
                     for w in caught:
                         cons_print(f"Warning: {w.message}")
         except ValveInputError as err:
-            cons_print("Calculate radii: cannot compute - please fix the inputs:")
+            cons_print("Calculate valve sizes: cannot compute - please fix the inputs:")
             for problem in err.errors:
                 cons_print(f"  - {problem}")
             self.report({'ERROR'}, err.summary)
@@ -3080,7 +3080,7 @@ class MESH_OT_calculate_valve_diameter(bpy.types.Operator):
             cons_print("Warning: A5 scales the MV to its ring area, not yet to the opening of the fully open leaflets "
                        "(not implemented yet). Read the A5 MV results with that in mind.")
 
-        msg = (f"Calculate radii: MV width={width:.3f} mm, depth={depth:.3f} mm, "
+        msg = (f"Calculate valve sizes: MV width={width:.3f} mm, depth={depth:.3f} mm, "
                f"AV diameter={diameter:.3f} mm.")
         cons_print(msg)
         self.report({'INFO'}, msg)
@@ -3295,13 +3295,13 @@ scene_properties = {
     "last_rotation_translation": bpy.props.FloatVectorProperty(name="Translation of the last rotation", default=(0, 0, 0)),
     "last_rotation_time": bpy.props.StringProperty(name="Time of the last rotation", default=""),
     # Mitral valve.
-    "mitral_width": bpy.props.FloatProperty(name="MV width", description="Mitral valve width in mm, commissure to commissure (template x). 'Calculate Radii' fills it from A_fit", default=13.0, min=0.01),
-    "mitral_depth": bpy.props.FloatProperty(name="MV depth", description="Mitral valve depth in mm, antero-posterior (template y). 'Calculate Radii' fills it from A_fit", default=10.0, min=0.01),
-    "valve_R_target": bpy.props.FloatProperty(name="R_target", description="MV width/depth that 'Calculate Radii' builds (model parameter, the same for all cases)", default=1.3, min=0.1),
+    "mitral_width": bpy.props.FloatProperty(name="MV width", description="Mitral valve width in mm, commissure to commissure (template x). 'Calculate valve sizes' fills it from A_fit", default=13.0, min=0.01),
+    "mitral_depth": bpy.props.FloatProperty(name="MV depth", description="Mitral valve depth in mm, antero-posterior (template y). 'Calculate valve sizes' fills it from A_fit", default=10.0, min=0.01),
+    "valve_R_target": bpy.props.FloatProperty(name="R_target", description="MV width/depth that 'Calculate valve sizes' builds (model parameter, the same for all cases)", default=1.3, min=0.1),
     "translation_mitral": bpy.props.FloatVectorProperty(name="Mitral valve translation", default=(0, 0, 1)),
     "angle_mitral": bpy.props.FloatVectorProperty(name="Mitral valve rotation", default=(0, 0, 0)),
     # Aortic valve.
-    "aortic_diameter": bpy.props.FloatProperty(name="AV diameter", description="Aortic valve diameter in mm. 'Calculate Radii' fills it from A_fit", default=7.0, min=0.01),
+    "aortic_diameter": bpy.props.FloatProperty(name="AV diameter", description="Aortic valve diameter in mm. 'Calculate valve sizes' fills it from A_fit", default=7.0, min=0.01),
     "translation_aortic": bpy.props.FloatVectorProperty(name="Aortic valve translation", default=(0, 0, 1)),
     "angle_aortic": bpy.props.FloatVectorProperty(name="Aortic valve rotation", default=(0, 0, 0)),
     # Valve area check (valve_geometry.py), run at the end of 'Quick reconstruction'.

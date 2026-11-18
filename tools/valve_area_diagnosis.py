@@ -555,7 +555,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     measured: Dict[str, vgc.PlaneDisc] = {}
     if args.export:
         if not session:
-            print("\n--export needs --session (valve planes and radii).", file=sys.stderr)
+            print("\n--export needs --session (valve planes and sizes).", file=sys.stderr)
             return 2
         measured = report_export(args.export, session, templates)
     if args.summary:

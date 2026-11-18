@@ -62,7 +62,7 @@ In Blender go to Edit→Preferences→Add-ons:
 - Install stl-plot.py, valve_geometry.py, calculate_valve_diameters.py and then ventricle-reconstruction-pipeline.py (**in this order**) from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
 - Open the GVR-Pipeline.blend scene from the repository → after that a new category should appear on the right side of the 3D Viewport called 'GVR-Pipeline'. Clicking it will open panels containing buttons, etc. used for the pipeline.
 ## Merge imperm into res
-The porous valve zones used to have three parts: *perm*, *res* and *imperm* (the outer band at the annulus). *imperm* is now part of *res*: the CFD lets the flow pass the whole valve disc, and *Calculate Radii* scales that disc to the fitted area. A `GVR-Pipeline.blend` from before this change still holds the templates `A3_*_imperm`, `A4_*_imperm` and `A5_AV_imperm`, and the pipeline stops with an error until they are merged. Do this once:
+The porous valve zones used to have three parts: *perm*, *res* and *imperm* (the outer band at the annulus). *imperm* is now part of *res*: the CFD lets the flow pass the whole valve disc, and *Calculate valve sizes* scales that disc to the fitted area. A `GVR-Pipeline.blend` from before this change still holds the templates `A3_*_imperm`, `A4_*_imperm` and `A5_AV_imperm`, and the pipeline stops with an error until they are merged. Do this once:
 1. Close Blender and copy the .blend to a place outside the repository as a backup.
 2. Open the .blend in **Blender 3.1**, switch to the *Scripting* workspace and open *Window → Toggle System Console*.
 3. Open `tools/merge_imperm_into_res.py` in the Text Editor (*Text → Open*) and press *Run Script*.
@@ -108,7 +108,7 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     \
     This sets up the arrangement of the mitral and aortic valve. (These inputs can be checked by pressing the buttons 'Add valve interface nodes' and 'Build support structure around valves'. Note that this will add nodes to an existing object. So consider creating a copy before pressing those buttons.) The panel shows the MV width/depth and warns if it lies outside 1.15 to 1.35, which also catches swapped values.
 
-    An additional button *Calculate Radii* reads directly from the import folder (Doppler CSVs, `inputPython.txt`, STL frames), fits the effective valve areas *A_fit* and sets MV width, MV depth and AV diameter so that the built valves have exactly these areas:
+    An additional button *Calculate valve sizes* reads directly from the import folder (Doppler CSVs, `inputPython.txt`, STL frames), fits the effective valve areas *A_fit* and sets MV width, MV depth and AV diameter so that the built valves have exactly these areas:
     - MV: depth = √(A_fit / (c · R_target)), width = R_target · depth;
     - AV: diameter = 2 · √(A_fit / a).
 
@@ -205,7 +205,7 @@ Check the node-connectivity of all selected objects. This includes:
 During the usage of the pipeline the longitudinal shift is saved as a variable bound to the respective object (ventricle 0 ... X). The user has to re-import the raw data and rename it to 'ref_obj'. While the reconstructed object is selected pressing the button 'Color minimal distance to raw object' will compute the minimal distance from each face-center of the reconstructed ventricle to any face-center of the reference object resulting in a 3d-representation of the Hausdorff distance (https://cgm.cs.mcgill.ca/~godfried/teaching/cg-projects/98/normand/main.html). The faces of the object are then colored with the distances which are normalized with the maximum value resulting in a scale from 0 to 1 (blue→white→red). To view the colors select 'Material Preview' in Blender (top right in 3D Viewport). This process give a qualitative visual representation of the quality of the reconstruction pipeline.
 
 ### Check valve areas
-Compares the mitral and aortic valve areas of the built geometry with the areas that *Calculate Radii* fitted. It runs automatically at the end of *Quick reconstruction* and on the button *Check valve areas* at the end of the panel *Valve options* (shown with the development tools), for the selected ventricles or, if none are selected, for all `ventricle_<n>` objects. The result goes to the System Console; a deviation above the tolerance and an MV width/depth outside 1.15 to 1.35 are reported as warnings. The check never stops the reconstruction.
+Compares the mitral and aortic valve areas of the built geometry with the areas that *Calculate valve sizes* fitted. It runs automatically at the end of *Quick reconstruction* and on the button *Check valve areas* at the end of the panel *Valve options* (shown with the development tools), for the selected ventricles or, if none are selected, for all `ventricle_<n>` objects. The result goes to the System Console; a deviation above the tolerance and an MV width/depth outside 1.15 to 1.35 are reported as warnings. The check never stops the reconstruction.
 - **Why it is needed:** the panel sizes are not drawn as circles or ellipses. They stretch template meshes (`A*_MV_Boundary`, `A*_MV_Surface`, the porous zones, atrium, aorta). The check confirms that the built flow opening area, perm + res (the whole disc), equals A_fit and that the MV has the intended width/depth.
 - **What it measures:**
   - the valve disc of every frame (faces in vertex group `MV` / `AV`); the output states how many frames were measured and whether they are identical;
@@ -216,10 +216,10 @@ Compares the mitral and aortic valve areas of the built geometry with the areas 
 - **Target:** `A_MV` / `A_AV` from `calc_valve_diameters_outputs/summary.csv` of the case the Import folder belongs to. Without that file the target is the area the panel values stand for (c · width · depth, a · (d/2)²). Notes are printed if
   - the panel values differ from `summary.csv` by more than 0.5 %, for example after a manual change;
   - `summary.csv` was computed for another approach;
-  - `summary.csv` has the old format (radii instead of sizes): then only A_fit is used; run *Calculate Radii* again.
+  - `summary.csv` has the old format (radii instead of sizes): then only A_fit is used; run *Calculate valve sizes* again.
 - **Settings** (panel *Valve options*): *Tolerance*, the allowed area deviation, default 2 %.
 - **Output per valve:** the areas, their share of the target, the mean velocity factor at equal flow, the size factor for width and depth (or the diameter) that would make the area match, the MV width/depth and the stretch factors.
-- *Calculate Radii* and the build stop with an error while the .blend still holds imperm templates (see *Merge imperm into res*). The check then reports a warning with the same hint and leaves the reconstruction as it is.
+- *Calculate valve sizes* and the build stop with an error while the .blend still holds imperm templates (see *Merge imperm into res*). The check then reports a warning with the same hint and leaves the reconstruction as it is.
 
 The same comparison runs outside Blender with `tools/valve_area_diagnosis.py` (standard library only). It reads the templates from `GVR-Pipeline.blend` and measures exported STLs. Example from the repository root:
 ```bash

@@ -1095,7 +1095,7 @@ def cases_to_jsonable(cases: Dict[str, CaseData]) -> Dict[str, object]:
 
 @dataclass
 class FitResult:
-    """Result of Calculate Radii in SI units: positive areas A_fit (m^2) and the sizes (m)."""
+    """Result of Calculate valve sizes in SI units: positive areas A_fit (m^2) and the sizes (m)."""
     A_MV: float
     A_AV: float
     sizes: ValveSizes

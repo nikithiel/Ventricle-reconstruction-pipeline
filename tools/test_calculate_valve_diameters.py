@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""T3: the computation behind 'Calculate Radii' (calculate_valve_diameters.main_calc_diameter).
+"""T3: the computation behind 'Calculate valve sizes' (calculate_valve_diameters.main_calc_diameter).
 
 Runs on a copy of the synthetic example (dataset/example) in a temporary folder; the
 repository is not touched. Needs numpy, pandas, scipy, matplotlib and trimesh, i.e. the
-Python that Calculate Radii runs in:
+Python that Calculate valve sizes runs in:
 
   python tools/test_calculate_valve_diameters.py
 
