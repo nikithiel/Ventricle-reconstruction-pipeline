@@ -25,7 +25,7 @@ FESTE_FLAECHEN = "gruppe"  # "gruppe":  Flächen, deren Knoten alle in EINER
                            #            der Gruppen aus VERTEXGRUPPE liegen
                            # "auswahl": die im Edit Mode ausgewählten Flächen
 VERTEXGRUPPE = "AV","MV"   # Gruppe(n) der festen Flächen, z. B. ["MV", "AV"]
-FESTE_RAENDER = "keine"  # Offene Ränder (Edge-Loops), die knotengenau bleiben:
+FESTE_RAENDER = "alle"  # Offene Ränder (Edge-Loops), die knotengenau bleiben:
                         #   "alle"   = alle bleiben unverändert
                         #   ["lower_basal_edge_loop"] = nur Ränder in diesen
                         #              Gruppen, alle anderen werden neu vernetzt
@@ -34,8 +34,8 @@ FESTE_RAENDER = "keine"  # Offene Ränder (Edge-Loops), die knotengenau bleiben:
 NAME_ZUSATZ = "_remesh" # Namenszusatz des neuen Objekts, z. B. "_A" oder "_B"
 ZIELGROESSE = None      # Kantenlänge weit weg von der Schnittstelle;
                         # None = Median der Kanten im bisherigen freien Netz
-WACHSTUM = 1.3          # Größenzunahme pro Elementreihe (1.1 ... 1.3 üblich)
-KNICKWINKEL = 40.0      # Grad. Kanten mit stärkerem Knick bleiben erhalten
+WACHSTUM = 1.2          # Größenzunahme pro Elementreihe (1.1 ... 1.3 üblich)
+KNICKWINKEL = 30.0      # Grad. Kanten mit stärkerem Knick bleiben erhalten
 KRUEMMUNG_ELEMENTE = 0  # > 0: zusätzlich nach Krümmung verfeinern
                         # (Elemente pro Vollkreis, z. B. 24). 0 = aus
 GLAETTEN = 10           # Durchgänge aus Kantenflips und Glättung nach gmsh

@@ -295,8 +295,11 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
                           bpy.data.objects.get(selected_names[i]), 
                           exclude_groups=["AV","MV"],
                           name="body_and_loop")     
-    
-    ref_id = 10
+    if context.scene.basal_ref < len(selected_names) - 1:
+        ref_id = context.scene.basal_ref
+    else:
+        cons_print(f"Frame {context.scene.basal_ref} does not exist. Defaulting to using frame 0")
+        ref_id = 0
     cur_name = selected_names[ref_id] # Sets first object as reference
     for i in range(0,len(selected_names)):
         if i == ref_id:
@@ -1435,21 +1438,15 @@ def build_valve_surface(context, obj, valve_mode, ratio, valve_index):
     bpy.ops.object.vertex_group_select()
     bpy.ops.object.mode_set(mode='OBJECT') 
 
-def update_value_for_translation(context, frame_id, pos_matrix_mitral, pos_matrix_aortic):
+def update_value_for_translation(context, mitral_diff, aortic_diff):
     """Update the translation values in the valve options panel using saved data from relative data value"""
-    if frame_id == 0: # First object in the list, no need to update the values
-        return True
-    else:
-        # Just updates the value using the previous frame as reference position
-        mitral_diff = np.array(pos_matrix_mitral)[frame_id] - np.array(pos_matrix_mitral)[frame_id - 1]
-        aortic_diff = np.array(pos_matrix_aortic)[frame_id] - np.array(pos_matrix_aortic)[frame_id - 1]
-        context.scene.translation_mitral += mitral_diff
-        context.scene.translation_aortic += aortic_diff
-        return True
+    context.scene.translation_mitral += mitral_diff
+    context.scene.translation_aortic += aortic_diff
+    return True
 
 def gradual_remesh(context,obj):
     """Wrapper function for remeshing from blender_gmsh_remesh module's remesh_object function. This time it replaces the object immediately""" 
-    blender_gmsh_remesh.remesh_object(obj,group_name=["AV","MV"], fixed_boundaries="keine")
+    blender_gmsh_remesh.remesh_object(obj,group_name=["AV","MV"], fixed_boundaries="keine", feature_angle=30, growth=1.2, algorithm=5)
     # Here the object is remeshed and a copy of it is saved with "_remesh" appended to the end
     obj_name = obj.name
     remesh_name = obj.name + "_remesh"
@@ -1470,10 +1467,10 @@ class MESH_OT_create_basal(bpy.types.Operator):
         # Subdivide the first object before morphing
         obj = bpy.data.objects.get(selected_names[5])
         
+        obj = bpy.data.objects.get(selected_names[context.scene.basal_ref]) # Only performs gradual-remesh on the reference object. Otherwise it's really heavy
+        gradual_remesh(context,obj)
         # Performs the gradual remeshing
         for i in range(0,len(selected_names)):
-            obj = bpy.data.objects.get(selected_names[i]) # Reassign object as it was replaced during remesh, even if not it will not matter
-            gradual_remesh(context,obj)
             obj = bpy.data.objects.get(selected_names[i]) # Reassign object as it was replaced during remesh, even if not it will not matter
             make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
         shift_shrinkwrap_topology_batch(context, pos_matrices, selected_names)
@@ -1496,7 +1493,10 @@ def mesh_create_basal_batch(context):
 
     for i in range(0,len(selected_names)):
         obj = bpy.data.objects.get(selected_names[i])
-        if not update_value_for_translation(context, i, pos_matrix_mitral, pos_matrix_aortic): return{'CANCELLED'}
+        if i > 0:
+            mitral_diff = np.array(pos_matrix_mitral)[i] - np.array(pos_matrix_mitral)[i - 1]
+            aortic_diff = np.array(pos_matrix_aortic)[i] - np.array(pos_matrix_aortic)[i - 1]
+            update_value_for_translation(context, mitral_diff, aortic_diff)
         if not mesh_create_basal(context, [obj]): 
             cons_print("FAILED")
             return{'CANCELLED'}
@@ -2305,37 +2305,48 @@ class MESH_OT_Add_Vessels_Valves(bpy.types.Operator):
     bl_idname = 'heart.add_vessels_valves'
     bl_label = 'Create objects for aorta, atrium and valves.'
     def execute(self, context):
-        add_vessels_and_valves(context)
+        # Get all the ventricles and sort their names.
+        selected_names = [object.name for object in context.selected_objects]
+        selected_names = sorted(selected_names, key=get_frame_number)
+        pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
+        pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
+        
+        for i in range(len(selected_names)-1,-1,-1):
+            if i < len(selected_names) - 1:
+                mitral_diff = np.array(pos_matrix_mitral)[i - 1] - np.array(pos_matrix_mitral)[i]
+                aortic_diff = np.array(pos_matrix_aortic)[i - 1] - np.array(pos_matrix_aortic)[i]
+                update_value_for_translation(context, mitral_diff, aortic_diff)
+            add_vessels_and_valves(context, id=f"{i}")
         return{'FINISHED'}
     
-def add_vessels_and_valves(context): 
+def add_vessels_and_valves(context, id): 
     """Create objects for aorta, atrium and valves"""
-    add_aorta(context)
-    add_atrium(context)
+    add_aorta(context,id=id)
+    add_atrium(context,id=id)
     # Porous mitral valve are only inserted in the porous medium approach. For the interpolated mitral valve approach the mitral valve becomes part of the ventricle. Aortic valve is not inserted in A3.
-    if context.scene.approach == 4 or context.scene.approach == 5: create_porous_valve_zones(context, 'Aortic', ['A4_AV_imperm', 'A4_AV_perm', 'A4_AV_res']) 
-    if context.scene.approach == 4: create_porous_valve_zones(context, 'Mitral', ['A4_MV_imperm', 'A4_MV_perm', 'A4_MV_res']) 
+    if context.scene.approach == 4 or context.scene.approach == 5: create_porous_valve_zones(context, 'Aortic', ['A4_AV_imperm', 'A4_AV_perm', 'A4_AV_res'], id=id) 
+    if context.scene.approach == 4: create_porous_valve_zones(context, 'Mitral', ['A4_MV_imperm', 'A4_MV_perm', 'A4_MV_res'], id=id) 
 
-def add_atrium(context):
+def add_atrium(context,id):
     """Copy atrium and place it above the mitral valve as a separate object"""
     # Choose the atrium fitting the current case.
-    atrium = copy_object(f"A{context.scene.approach}_Atrium", "atrium")
+    atrium = copy_object(f"A{context.scene.approach}_Atrium", "atrium_" + id)
     atrium.select_set(True)
     bpy.context.view_layer.objects.active = atrium
     scale_rotate_translate_object(context, atrium, "Mitral", ratio=1)
     triangulate_mesh_object(atrium, quad_method='BEAUTY', source="add_atrium") # A5_Atrium ships one quad; A3/A4 are already triangles.
     return atrium
 
-def add_aorta(context):
+def add_aorta(context,id):
     """Copy aorta and place it above the aortic valve as a separate object"""
-    aorta = copy_object(f"A{context.scene.approach}_Aorta", "aorta")
+    aorta = copy_object(f"A{context.scene.approach}_Aorta", "aorta_" + id)
     aorta.select_set(True)
     bpy.context.view_layer.objects.active = aorta
     scale_rotate_translate_object(context, aorta, "Aortic", ratio=1)
     triangulate_mesh_object(aorta, quad_method='BEAUTY', source="add_aorta") # A5_Aorta ships 64 quads; A3/A4 are already triangles.
     return aorta
 
-def create_porous_valve_zones(context, valve_mode, valve_strings):
+def create_porous_valve_zones(context, valve_mode, valve_strings, id):
     """Add separate porous zone objects (valves, atrium and aorta) into workspace"""
     # Set up object name after insertion.
     if valve_mode == 'Aortic':
@@ -2346,7 +2357,7 @@ def create_porous_valve_zones(context, valve_mode, valve_strings):
     obj_types = ["_perm", "_res", "_imperm"] # Collection of valve types for name setup.
     for obj_str in valve_strings:
         for obj_type in obj_types:
-            if obj_type in obj_str: new_name = f"{valve_substring}{obj_type}" # Combine substrings to string of new object.
+            if obj_type in obj_str: new_name = f"{valve_substring}{obj_type}_" + id # Combine substrings to string of new object.
         # Create new object by copying it from existing object.
         new_obj = copy_object(obj_str, new_name)
         new_obj.select_set(True)
@@ -2725,8 +2736,9 @@ def test_function(context):
     view_layer = context.view_layer
     selected_objects = context.selected_objects
     cobj = selected_objects[0]
+    cons_print(cobj["mitral_position_matrix"])
     #smooth_vertex_group(cobj ,"body", factor=1, iter=3, use_laplacian=False)
-    extract_vertex_group_object(cobj, "body", cobj.name + "_body")
+    #extract_vertex_group_object(cobj, "body", cobj.name + "_body")
     #gradual_remesh(context,cobj)
     #cobj2 = selected_objects[1]
     #gradual_mesh_translate(cobj, (0,0,-1), group='lower_basal_edge_loop')
@@ -2936,7 +2948,9 @@ class PANEL_Setup_Variables(bpy.types.Panel):
         row = layout.row()
         layout.prop(context.scene, "final_sm_iter", text="Volume preserving smoothing iterations")
         row = layout.row()
-        row.label(text= "Basal Smoothing Variables")
+        row.label(text= "Basal Variables")
+        row = layout.row()
+        row.prop(context.scene, 'basal_ref', text="Basal frame used for reference")
         row = layout.row()
         row.prop(context.scene, 'use_basal_smoothing', text="Applies smoothing for basal (NOT VOLUME PRESERVING)")
         row = layout.row() 
@@ -4039,6 +4053,7 @@ scene_properties = {
     "con_fade_percentage": bpy.props.FloatProperty(name="Share of the apical height over which the smoothing of the connection fades out below the cut", default=20.0, min=0.1, max=100.0, subtype='PERCENTAGE'),
     "final_sm_iter": bpy.props.IntProperty(name="Volume preserving smoothing iterations applied to the whole ventricle except the valves", default=10, min=0),
     # Smoothing iter
+    "basal_ref": bpy.props.IntProperty(name="Basal frame to use for reference", default=0, min=0),
     "use_basal_smoothing" : bpy.props.BoolProperty(name="Use basal region smoothing", default=False),
     "basal_sm_factor" : bpy.props.FloatProperty(name="Basal Region Smoothing Factor", default=0.5),
     "basal_sm_iter" : bpy.props.IntProperty(name="Basal Region Smoothing Iterations", default=5),
