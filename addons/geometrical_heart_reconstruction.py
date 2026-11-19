@@ -293,10 +293,10 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
                           name="MV_deep")
         make_custom_group(context,
                           bpy.data.objects.get(selected_names[i]), 
-                          exclude_groups=["AV_deep","MV_deep"],
-                          name="body_more")     
+                          exclude_groups=["AV","MV"],
+                          name="body_and_loop")     
     
-    ref_id = 5
+    ref_id = 10
     cur_name = selected_names[ref_id] # Sets first object as reference
     for i in range(0,len(selected_names)):
         if i == ref_id:
@@ -310,14 +310,14 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[ref_id]
         
         translate_mesh_object(context, source_copy, shift= (0,0,0), group=None, return_to_object=False)
-        translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral + shift_aortic), group=None, return_to_object=False)
-        translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral - shift_aortic), group="MV", return_to_object=False)
-        translate_mesh_object(context, source_copy, shift= 0.5 * (-shift_mitral + shift_aortic), group="AV", return_to_object = False)
+        #translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral + shift_aortic), group=None, return_to_object=False)
+        #translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral - shift_aortic), group="MV", return_to_object=False)
+        #translate_mesh_object(context, source_copy, shift= 0.5 * (-shift_mitral + shift_aortic), group="AV", return_to_object = False)
         
-        # --- Here separate copy of the body and then shrinkwrap to it
-        temp_target = extract_vertex_group_object(target, "body", target.name + "_body")
-        shift_shrinkwrap_topology(context, source_copy, temp_target, shift=None, shrinkwrap='NEAREST_SURFACEPOINT', group='body') # Shifts and then shrinkwraps body of the basal region
-        bpy.data.objects.remove(temp_target, do_unlink=True)
+        # Experimental mesh shift
+        translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral + shift_aortic), group=None, return_to_object=False)
+        gradual_mesh_translate(source_copy, shift= 0.5 * (shift_mitral - shift_aortic), group="MV", max_dist=3)
+        gradual_mesh_translate(source_copy, shift= 0.5 * (-shift_mitral + shift_aortic), group="AV", max_dist=3)
         
         # --- Shift and shrinkwrap only the lower edge loop --- #
         ll_x_shift = get_min_max_x(target,0)[1] + get_min_max_x(target,0)[0] - get_min_max_x(source_copy,0)[1] - get_min_max_x(source_copy,0)[0]
@@ -325,8 +325,8 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         ll_z_shift = get_min_max_z(target,0)[1] + get_min_max_z(target,0)[0] - get_min_max_z(source_copy,0)[1] - get_min_max_z(source_copy,0)[0]
         
         lower_loop_shift = [0.5 * ll_x_shift, 0.5* ll_y_shift, 0.5 * ll_z_shift] # Calcs the difference between the lowest points between source and target
-        translate_mesh_object(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', return_to_object=False)
-        #gradual_mesh_translate(source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', max_dist = 2)
+        #translate_mesh_object(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', return_to_object=False)
+        gradual_mesh_translate(source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', max_dist = 3)
         
         ### --- After position is moved to overlap as much as possible, the morphing is performed --- ###
         # --- Here separate a copy of the lower basal edge loop and then shrinkwrap to it
@@ -334,12 +334,17 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         shift_shrinkwrap_topology(context, source_copy, temp_target, shift=None, shrinkwrap='NEAREST_VERTEX', group='lower_basal_edge_loop') # Performs shrinkwrap on the lower edge loop
         bpy.data.objects.remove(temp_target, do_unlink=True)
         
+        # --- Here separate copy of the body and then shrinkwrap to it
+        temp_target = extract_vertex_group_object(target, "body_and_loop", target.name + "_body_and_loop")
+        shift_shrinkwrap_topology(context, source_copy, temp_target, shift=None, shrinkwrap='PROJECT', group='body') # Shifts and then shrinkwraps body of the basal region
+        bpy.data.objects.remove(temp_target, do_unlink=True)
+        
         # Prep for next iter    
         cur_name = selected_names[i] # Now the current target becomes the reference for the next iter
         bpy.data.objects.remove(target, do_unlink=True) # Remove the previous target object so that there's no overlap
         source_copy.name = cur_name # Rename shrinkwrapped object to the current
  
-def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body', use_axis=[0,0,0]):
+def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap='PROJECT', group='body', use_axis=[0,0,0], offset=0):
     """Shift and then applies the shrinkwrap modifier on the object to perform retopology"""
     scene = context.scene
     view_layer = context.view_layer
@@ -356,6 +361,7 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
     # Here we add then apply modifiers to the copied object that makes it shrinkwrap around the target
     modifier = source.modifiers.new(name="shrinkwrap", type='SHRINKWRAP')
     modifier.target = target
+    modifier.offset = offset
     modifier.wrap_method = shrinkwrap
     modifier.vertex_group = group
     if group =="fullbody": # Extra settings for when morphing entire bodies
@@ -368,8 +374,8 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
     bpy.ops.object.modifier_apply(modifier='shrinkwrap')
 
 def gradual_mesh_translate(obj, shift, group, max_dist=5):
+    # Translate vertices within the group with no influence change, but also translates the surrounding vertices proportional to the distance to the mesh group
     # WARNING: This translation causes deformations in the surrounding vertices
-    # The influence determines the distance of which vertices would still be affected
     bpy.context.view_layer.objects.active = obj
     
     selected_group = obj.vertex_groups[group]
@@ -407,7 +413,119 @@ def gradual_mesh_translate(obj, shift, group, max_dist=5):
         vertex.co += shift * influence
             
     mesh.update() # Mesh update needs to be finalized in order for it to actually take effect
-    
+
+def gradual_mesh_translate_rbf(obj, shift, group, max_dist=5.0, shell_points=32, neighbors=64):
+
+    bpy.context.view_layer.objects.active = obj
+
+    selected_group = obj.vertex_groups[group]
+
+    shift = Vector(shift)
+    mesh = obj.data
+
+    # Store original vertex positions
+    og_positions = np.array([
+        tuple(v.co) for v in mesh.vertices
+    ])
+
+    # Find vertices belonging to the group
+    selected_indices = []
+
+    for vertex in mesh.vertices:
+        try:
+            weight = selected_group.weight(vertex.index)
+
+            if weight > 0.0:
+                selected_indices.append(vertex.index)
+
+        except RuntimeError:
+            pass
+
+    if not selected_indices:
+        return
+
+    # Group vertex positions
+    group_positions = og_positions[selected_indices]
+
+    # Generate directions distributed over a sphere
+    # using the Fibonacci sphere algorithm
+    indices = np.arange(shell_points)
+
+    phi = np.pi * (3.0 - np.sqrt(5.0))
+
+    y = 1 - (indices / float(shell_points - 1)) * 2
+    radius = np.sqrt(1 - y * y)
+
+    theta = phi * indices
+
+    directions = np.column_stack((
+        np.cos(theta) * radius,
+        y,
+        np.sin(theta) * radius
+    ))
+
+    # Generate zero-influence control points around each
+    # vertex belonging to the group
+    shell_positions = (
+        group_positions[:, None, :]
+        + directions[None, :, :] * max_dist
+    )
+
+    shell_positions = shell_positions.reshape(-1, 3)
+
+    # Combine control points
+    control_positions = np.vstack((
+        group_positions,
+        shell_positions
+    ))
+
+    # Group vertices have influence 1
+    # Surrounding shell points have influence 0
+    control_values = np.concatenate((
+        np.ones(len(group_positions)),
+        np.zeros(len(shell_positions))
+    ))
+
+    # Remove duplicate control positions
+    control_positions, unique_indices = np.unique(
+        control_positions,
+        axis=0,
+        return_index=True
+    )
+
+    control_values = control_values[unique_indices]
+
+    # Create RBF interpolator
+    interpolator = RBFInterpolator(
+        control_positions,
+        control_values[:, None],
+        kernel="gaussian",
+        epsilon=2.0 / max_dist,
+        smoothing=1e-6,
+        neighbors=min(neighbors, len(control_positions)),
+        degree=-1
+    )
+
+    # Calculate influence for every vertex
+    influences = interpolator(og_positions).flatten()
+
+    # Clamp influence to prevent overshooting
+    influences = np.clip(influences, 0.0, 1.0)
+
+    # Apply translation
+    shift_np = np.array(shift)
+
+    new_positions = (
+        og_positions
+        + influences[:, None] * shift_np
+    )
+
+    # Update mesh
+    for vertex, position in zip(mesh.vertices, new_positions):
+        vertex.co = position
+
+    mesh.update()
+        
 def make_custom_group(context, obj, exclude_groups, name='body'):
     """
     Function that adds a new group which only includes vertices that are not the valves and lower loop
@@ -1331,7 +1449,7 @@ def update_value_for_translation(context, frame_id, pos_matrix_mitral, pos_matri
 
 def gradual_remesh(context,obj):
     """Wrapper function for remeshing from blender_gmsh_remesh module's remesh_object function. This time it replaces the object immediately""" 
-    blender_gmsh_remesh.remesh_object(obj,group_name=["AV","MV"])
+    blender_gmsh_remesh.remesh_object(obj,group_name=["AV","MV"], fixed_boundaries="keine")
     # Here the object is remeshed and a copy of it is saved with "_remesh" appended to the end
     obj_name = obj.name
     remesh_name = obj.name + "_remesh"
@@ -1350,14 +1468,14 @@ class MESH_OT_create_basal(bpy.types.Operator):
         selected_names = [object.name for object in context.selected_objects]
         selected_names = sorted(selected_names, key=get_frame_number)
         # Subdivide the first object before morphing
-        obj = bpy.data.objects.get(selected_names[0])
+        obj = bpy.data.objects.get(selected_names[5])
         
         # Performs the gradual remeshing
-        gradual_remesh(context,obj)
         for i in range(0,len(selected_names)):
             obj = bpy.data.objects.get(selected_names[i]) # Reassign object as it was replaced during remesh, even if not it will not matter
-        make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
-        # Here the issue is that the vertex group for lower edge increases after subdivision
+            gradual_remesh(context,obj)
+            obj = bpy.data.objects.get(selected_names[i]) # Reassign object as it was replaced during remesh, even if not it will not matter
+            make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
         shift_shrinkwrap_topology_batch(context, pos_matrices, selected_names)
         if context.scene.use_basal_smoothing:
             for i in range(0, len(selected_names)):
@@ -2607,7 +2725,8 @@ def test_function(context):
     view_layer = context.view_layer
     selected_objects = context.selected_objects
     cobj = selected_objects[0]
-    smooth_vertex_group(cobj ,"body", factor=1, iter=3, use_laplacian=False)
+    #smooth_vertex_group(cobj ,"body", factor=1, iter=3, use_laplacian=False)
+    extract_vertex_group_object(cobj, "body", cobj.name + "_body")
     #gradual_remesh(context,cobj)
     #cobj2 = selected_objects[1]
     #gradual_mesh_translate(cobj, (0,0,-1), group='lower_basal_edge_loop')
