@@ -1,0 +1,9 @@
+#!/bin/sh
+# Repo checks before every commit (tools/check.py). Enabled with: git config core.hooksPath .githooks
+cd "$(git rev-parse --show-toplevel)" || exit 1
+for py in python3 python; do
+  if "$py" -c "import sys; sys.exit(sys.version_info < (3, 8))" >/dev/null 2>&1; then
+    exec "$py" tools/check.py
+  fi
+done
+echo "pre-commit: no Python 3 found, tools/check.py skipped" >&2

@@ -1,0 +1,3 @@
+# LF in the repository, the platform line endings in the working copy (also without core.autocrlf)
+* text=auto
+*.blend binary
