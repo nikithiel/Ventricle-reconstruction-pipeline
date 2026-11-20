@@ -1497,6 +1497,9 @@ def mesh_create_basal_batch(context):
             mitral_diff = np.array(pos_matrix_mitral)[i] - np.array(pos_matrix_mitral)[i - 1]
             aortic_diff = np.array(pos_matrix_aortic)[i] - np.array(pos_matrix_aortic)[i - 1]
             update_value_for_translation(context, mitral_diff, aortic_diff)
+        # Saves the temporary values of the current valve position. This is for easier access for later steps
+        obj["translation_mitral"] = context.scene.translation_mitral
+        obj["translation_aortic"] = context.scene.translation_aortic
         if not mesh_create_basal(context, [obj]): 
             cons_print("FAILED")
             return{'CANCELLED'}
@@ -2736,7 +2739,8 @@ def test_function(context):
     view_layer = context.view_layer
     selected_objects = context.selected_objects
     cobj = selected_objects[0]
-    cons_print(cobj["mitral_position_matrix"])
+    cons_print(cobj["translation_mitral"])
+    context.scene.translation_mitral = cobj["translation_mitral"]
     #smooth_vertex_group(cobj ,"body", factor=1, iter=3, use_laplacian=False)
     #extract_vertex_group_object(cobj, "body", cobj.name + "_body")
     #gradual_remesh(context,cobj)
