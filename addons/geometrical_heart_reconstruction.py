@@ -33,7 +33,6 @@ matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
 import multiprocessing as mp
 from pathlib import Path
-#from pygem import RBF
 
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
@@ -416,118 +415,6 @@ def gradual_mesh_translate(obj, shift, group, max_dist=5):
         vertex.co += shift * influence
             
     mesh.update() # Mesh update needs to be finalized in order for it to actually take effect
-
-def gradual_mesh_translate_rbf(obj, shift, group, max_dist=5.0, shell_points=32, neighbors=64):
-
-    bpy.context.view_layer.objects.active = obj
-
-    selected_group = obj.vertex_groups[group]
-
-    shift = Vector(shift)
-    mesh = obj.data
-
-    # Store original vertex positions
-    og_positions = np.array([
-        tuple(v.co) for v in mesh.vertices
-    ])
-
-    # Find vertices belonging to the group
-    selected_indices = []
-
-    for vertex in mesh.vertices:
-        try:
-            weight = selected_group.weight(vertex.index)
-
-            if weight > 0.0:
-                selected_indices.append(vertex.index)
-
-        except RuntimeError:
-            pass
-
-    if not selected_indices:
-        return
-
-    # Group vertex positions
-    group_positions = og_positions[selected_indices]
-
-    # Generate directions distributed over a sphere
-    # using the Fibonacci sphere algorithm
-    indices = np.arange(shell_points)
-
-    phi = np.pi * (3.0 - np.sqrt(5.0))
-
-    y = 1 - (indices / float(shell_points - 1)) * 2
-    radius = np.sqrt(1 - y * y)
-
-    theta = phi * indices
-
-    directions = np.column_stack((
-        np.cos(theta) * radius,
-        y,
-        np.sin(theta) * radius
-    ))
-
-    # Generate zero-influence control points around each
-    # vertex belonging to the group
-    shell_positions = (
-        group_positions[:, None, :]
-        + directions[None, :, :] * max_dist
-    )
-
-    shell_positions = shell_positions.reshape(-1, 3)
-
-    # Combine control points
-    control_positions = np.vstack((
-        group_positions,
-        shell_positions
-    ))
-
-    # Group vertices have influence 1
-    # Surrounding shell points have influence 0
-    control_values = np.concatenate((
-        np.ones(len(group_positions)),
-        np.zeros(len(shell_positions))
-    ))
-
-    # Remove duplicate control positions
-    control_positions, unique_indices = np.unique(
-        control_positions,
-        axis=0,
-        return_index=True
-    )
-
-    control_values = control_values[unique_indices]
-
-    # Create RBF interpolator
-    interpolator = RBFInterpolator(
-        control_positions,
-        control_values[:, None],
-        kernel="gaussian",
-        epsilon=2.0 / max_dist,
-        smoothing=1e-6,
-        neighbors=min(neighbors, len(control_positions)),
-        degree=-1
-    )
-
-    # Calculate influence for every vertex
-    influences = interpolator(og_positions).flatten()
-
-    # Clamp influence to prevent overshooting
-    influences = np.clip(influences, 0.0, 1.0)
-
-    # Apply translation
-    shift_np = np.array(shift)
-
-    new_positions = (
-        og_positions
-        + influences[:, None] * shift_np
-    )
-
-    # Update mesh
-    for vertex, position in zip(mesh.vertices, new_positions):
-        vertex.co = position
-
-    mesh.update()
         
 def make_custom_group(context, obj, exclude_groups, name='body'):
     """
@@ -611,25 +498,6 @@ def extract_vertex_group_object(obj, group, new_name):
     new_obj.matrix_world = obj.matrix_world.copy()
 
     return new_obj
-
-def RBF_group_morph(source, target, group, kernel, radius, epsilon, tol): #WIP
-    source_group = source.vertex_groups['group']
-    target_group = target.vertex_groups['group']
-    
-    # Initialize RBF
-    rbf = RBF(
-        original_control_points=source_group,
-        deformed_control_points=target_group,
-        radius=radius,
-        func=kernel,
-        eps=epsilon,
-        tol=tol
-    )
-    
-    # Apply deformation to source subgroup
-    morphed_group = rbf(source_group)
-
-    return morphed_group
 
 # UI-interface functions.
 class MESH_OT_get_node(bpy.types.Operator):
@@ -2700,75 +2568,6 @@ def color_min_dist(context):
         face.select = False
     # Turn off edit mode
     bpy.ops.object.editmode_toggle()
-
-class MESH_DEV_test(bpy.types.Operator):
-    """Test function for development"""
-    bl_idname = 'heart.test'
-    bl_label = 'Empty test function'
-    def execute(self, context):
-        test_function(context)
-        return{'FINISHED'}
-
-def test_function(context):
-    """Empty test function"""
-    scene = context.scene
-    view_layer = context.view_layer
-    selected_objects = context.selected_objects
-    cobj = selected_objects[0]
-    cons_print(cobj["translation_mitral"])
-    context.scene.translation_mitral = cobj["translation_mitral"]
-    context.scene.translation_aortic = cobj["translation_aortic "]
-    #smooth_vertex_group(cobj ,"body", factor=1, iter=3, use_laplacian=False)
-    #extract_vertex_group_object(cobj, "body", cobj.name + "_body")
-    #gradual_remesh(context,cobj)
-    #cobj2 = selected_objects[1]
-    #gradual_mesh_translate(cobj, (0,0,-1), group='lower_basal_edge_loop')
-    #translate_mesh_object(context, cobj, (1,1,1), group = 'lower_basal_edge_loop')
-    #gradual_mesh_translate(cobj, (-1    ,-1,-1), group='lower_basal_edge_loop', max_dist=5)
-    return True
-
-def compareMeshes(mesh1, mesh2, group=None):
-    bmesh1 = bmesh.from_edit_mesh(mesh1.data)
-    bmesh2 = bmesh.from_edit_mesh(mesh2.data)
-    
-    # Starts Comparison here
-    if (len(bmesh1.verts) != len(bmesh2.verts)):
-        return f"Inequal amount of vertices. Between {len(bmesh1.verts)} and {len(bmesh2.verts)}"
-    if (len(bmesh1.edges) != len(bmesh2.edges)):
-        return "Inequal amount of edges"
-    if (len(bmesh1.faces) != len(bmesh2.faces)):
-        return "Inequal amount of faces"
-    #for each face, if the same verts make up the face
-    for i in range(0, len(bmesh1.faces)):
-        bmesh1faceVertsList = []
-        bmesh2faceVertsList = []
-        for vert in bmesh1.faces[i].verts:
-            bmesh1faceVertsList.append(vert.index)
-        for vert in bmesh2.faces[i].verts:
-            bmesh2faceVertsList.append(vert.index)
-        bmesh1faceVertsList.sort()
-        bmesh2faceVertsList.sort()
-        if (bmesh1faceVertsList != bmesh2faceVertsList):
-            return "Mismatching vertex on a face"
-    #for each edge, if the same verts make up the edge
-    for i in range(0, len(bmesh1.edges)):
-        bmesh1edgeVertsList = []
-        bmesh2edgeVertsList = []
-        for vert in bmesh1.edges[i].verts:
-            bmesh1faceVertsList.append(vert.index)
-        for vert in bmesh2.edges[i].verts:
-            bmesh2faceVertsList.append(vert.index)
-        bmesh1edgeVertsList.sort()
-        bmesh2edgeVertsList.sort()
-        if (bmesh1edgeVertsList != bmesh2edgeVertsList):
-            return "Mismatching vertex on an edge"
-    #if we make it through all the checks, we have a match!
-    return "It matches!"
-
-def reset_values(context):
-    context.scene.translation_mitral = (0,-4,50.5)
-    context.scene.translation_aortic = (0,4,50.5)
-
 #-----
 
 #PANELS
@@ -3036,9 +2835,6 @@ class PANEL_Dev_tools(bpy.types.Panel):
         sub = row.row(align=True)
         sub.enabled = not context.scene.live_compare
         sub.operator('heart.save_plot_stl', text = 'Save', icon = 'DISK_DRIVE')
-        # Topologically Transforming multiple object to all have the same topology by transforming one reference object into everything else
-        row = layout.row(align=True)
-        row.operator('heart.test', text="TEST")
 
 #------
 
@@ -3923,53 +3719,6 @@ def export_object_to_stl(obj, filepath, depsgraph=None):
 
     eval_obj.to_mesh_clear()
 
-class MESH_OT_object_transform(bpy.types.Operator):
-    """Reshape mesh object to preserve mesh connetivity and topology between objects. Currently uses the object with max mesh count as reference (WIP)"""
-    bl_idname = 'heart.object_transform'
-    bl_label = 'Object Transformation'
-    def execute(self,context):
-        scene = context.scene
-        view_layer = context.view_layer
-
-        # --- Remember original selection & active object, also which meshes were selected ---
-        selected_objects = context.selected_objects
-        
-        if len(selected_objects) == 0 or not selected_objects:
-            cons_print(f"No objects selected")
-            return False
-
-        max = 0
-        for a in selected_objects:
-            if len(bmesh.from_edit_mesh(a.data).verts) > max:
-                source = a
-                max = len(bmesh.from_edit_mesh(a.data).verts)
-        
-        cons_print(f"Object used as reference {source.name}")
-        
-        bpy.ops.object.mode_set(mode='OBJECT') 
-        
-        for obj in selected_objects:
-            if obj != source:
-                cons_print(f"current object target {obj.name}")
-                copied_source = copy_object(source.name, obj.name + "_transformed")
-                BvH_transform(copied_source,obj)
-                copied_source.data.update()
-        cons_print(f"Operation completed")    
-        return{"FINISHED"}
-
-def BvH_transform(source,target):
-    cons_print(f"source {source}")
-    cons_print(f"target {target}")
-    bvh = BVHTree.FromObject(target, bpy.context.evaluated_depsgraph_get())
-    
-    for v in source.data.vertices:
-        world_co = source.matrix_world @ v.co
-
-        loc, normal, index, dist = bvh.find_nearest(world_co)
-
-        if loc:
-            v.co = source.matrix_world.inverted() @ loc
-
 classes = [
     PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 
@@ -3978,7 +3727,7 @@ classes = [
 ]
 
 dev_classes = [PANEL_Poisson, MESH_OT_poisson, MESH_OT_create_valve_orifice, MESH_OT_connect_valves, 
-               PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_DEV_test, MESH_OT_plot_STL, MESH_OT_save_plot_STL, 
+               PANEL_Dev_tools, MESH_DEV_volumes, MESH_DEV_indices, MESH_DEV_edge_index, MESH_DEV_color_min_dist, MESH_OT_plot_STL, MESH_OT_save_plot_STL, 
                MESH_OT_calculate_valve_diameter,
                MESH_OT_update_mitral_ref, MESH_OT_update_aorta_ref, MESH_OT_store_ref_positions]
 
