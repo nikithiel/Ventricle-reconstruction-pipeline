@@ -120,6 +120,8 @@ F1 and F5 includes a clickable button for sorting the volumes and selecting the 
     - Smoothing repetitions: Used in smoothing the connection of basal and apical region. Amount of smoothing repetitions, each fading out over a wider band
     - Smoothing fade-out share of apical height: The connection smoothing acts at full strength on everything above the removal threshold and fades out below it, following a cosine. The fade-out height is this share of the distance from the threshold down to the apex, so it scales with the size of the ventricle. Larger values give a softer transition but smooth more of the apical measurement data (default 20 %)
     - Volume preserving smoothing iterations: Taubin smoothing of the whole ventricle except the valve discs, applied after the connection has been smoothed. It removes segmentation noise from the apical region, which the connection smoothing never reaches, without shrinking the volume. Set to 0 to disable it (default 10)
+    - Basal frame used for reference: Basal region that'll be used for reference when shrinkwrapping the basal regions to match the node connectivity
+    - Toggle for if smoothing should be used on the basal region
     - Basal region smoothing factor: Used in the smoothing process of the basal region for both the normal smoothing and laplacian smoothing as the lambda factor
     - Basal region smoothing iterations: How many iterations to be used during the smoothing process. If it's normal smoothing it's iterative cascading smoothing (performs n iterations and repeats for n-1 iterations until 0) and just one repeat for laplacian smoothing
 5. Select approach\
@@ -141,10 +143,12 @@ Every step triangulates the geometry it creates, so all reconstructed objects (v
 
 2. Create basal region\
     2.1. Select all the ventricles, for which basal regions are to be generated for\
-    2.2. Press button 'Create basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
+    2.2. Select a value for the frame that will be used for reference and also the smoothing values.
+    2.3. Press button 'Create basal region' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
     This creates a reference basal region used the selected objects. For that first the valve indices and a support structure are added to a copy of the reference ventricle. Then the Poisson surface reconstruction is applied to the vertices to create a surface object from all vertices. After that the object is automatically remeshed and the apical region is removed while smoothing the lower edge loop of the resulting basal region. 
     If multiple objects are selected, then a basal region will be created for each of the selected object, however, these basal regions will most likely not share the same topology. 
+    Afterwards shrinkwrapping and smoothing will be performed from copies of the reference basal region to all of the other produced basal region such that they share the same node connectivity.
     The generated basal region will automatically be selected.
 
 3. Connect basal and apical parts\
@@ -162,7 +166,7 @@ Every step triangulates the geometry it creates, so all reconstructed objects (v
 4. Add atrium, aorta and valves\
     4.1. Press button 'Add atrium, aorta and valves' in the panel 'Geometric ventricle reconstruction pipeline'\
     \
-    This copies objects for aorta, atrium, mitral and aortic valve found in the Blender-project and scales, rotates and positions them at their respective places.
+    This copies objects for aorta, atrium, mitral and aortic valve found in the Blender-project and scales, rotates and positions them at their respective places for every frame.
 
 ## Quick reset
 ![Image of the dev tools panel](/readme_images/File_management_quick_reset.png)\
