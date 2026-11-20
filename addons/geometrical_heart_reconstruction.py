@@ -2417,42 +2417,10 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
         ventricle_names = [obj.name for obj in find_ventricle_objects(context.selected_objects)]
         shift_distances = remove_multiple_basal_region(context) # Remove old basal region.
         
+        MESH_OT_create_basal.execute(self,context)
+        MESH_OT_connect_apical_and_basal.execute(self,context)
+        MESH_OT_Add_Vessels_Valves.execute(self,context)
         
-        #TODO: ALL THE CREATE BASAL OPERATION. WILL BE MOVED TO ANOTHER FUNCTION LATER
-        _, pos_matrices = mesh_create_basal_batch(context)
-        
-        # Saves all the currently selected object just in case
-        selected_names = [object.name for object in context.selected_objects]
-        selected_names = sorted(selected_names, key=get_frame_number)
-        # Subdivide the first object before morphing
-        obj = bpy.data.objects.get(selected_names[context.scene.basal_ref])
-        
-        obj = bpy.data.objects.get(selected_names[context.scene.basal_ref]) # Only performs gradual-remesh on the reference object. Otherwise it's really heavy
-        gradual_remesh(context,obj)
-        # Performs the gradual remeshing
-        for i in range(0,len(selected_names)):
-            obj = bpy.data.objects.get(selected_names[i]) # Reassign object as it was replaced during remesh, even if not it will not matter
-            make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
-        shift_shrinkwrap_topology_batch(context, pos_matrices, selected_names)
-        if context.scene.use_basal_smoothing:
-            for i in range(0, len(selected_names)):
-                smooth_vertex_group(bpy.data.objects.get(selected_names[i]),"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=False)
-        
-        #TODO: CONNECT OPERATION PLEASE REFACTOR INTO A CLEAR SINGLE FUNCTION LATER
-        _, finished_names = mesh_connect_apical_and_basal_pairs(context)
-        for name in finished_names:
-            obj = bpy.data.objects.get(name)
-            obj.select_set(True)
-        
-        #TODO: VALVE FUNCTION PLEASE REFACTOR INTO A CLEAR SINGLE FUNCTION LATER
-        selected_names = [object.name for object in context.selected_objects]
-        selected_names = sorted(selected_names, key=get_frame_number)
-        
-        for i in range(0,len(selected_names)):
-            obj = bpy.data.objects.get(selected_names[i])
-            context.scene.translation_mitral = obj["translation_mitral"]
-            context.scene.translation_aortic = obj["translation_aortic"]
-            add_vessels_and_valves(context, id=f"{i}")
         ventricles = [bpy.data.objects[name] for name in ventricle_names if name in bpy.data.objects]
         error = check_pipeline_triangulated(context, ventricles)
         
