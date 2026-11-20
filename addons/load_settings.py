@@ -76,6 +76,29 @@ class LoadPlan:
     kept: list = field(default_factory=list)  # what keeps its current value, with the reason
     todo: list = field(default_factory=list)  # the next steps
     changes: list = field(default_factory=list)  # 'property: old -> new' for the console
+    import_dir: str = None  # the resolved Import folder of the loaded case, None if unknown
+    valve_sizes_out_of_date: bool = False  # schema 1 or a size missing: To do 'Calculate valve sizes'
+    path: str = ""  # the loaded log
+
+    def status(self):
+        """The status line text. Always an info: a warning would open a second popup over the window."""
+        left_out = []
+        if self.valve_sizes_out_of_date:
+            left_out.append("valve sizes out of date")
+        if "pos_top" not in self.values:  # the landmarks come all three or none
+            left_out.append("landmarks not loaded")
+        if self.kept:
+            left_out.append(f"{len(self.kept)} kept")
+        text = f"Load settings: {len(self.values)} settings loaded from '{os.path.basename(self.path)}'"
+        return text + (f"; {', '.join(left_out)} (see the console)." if left_out else ".")
+
+    def console_lines(self):
+        """What the console shows: every change as 'old -> new', then what was kept and what is left to do."""
+        lines = [f"Loaded from: {self.path}"] + self.header + self.notes
+        for title, items in (("Changed", self.changes), ("Kept", self.kept), ("To do", self.todo)):
+            if items:
+                lines += [f"{title}:"] + [f"  {item}" for item in items]
+        return lines + [f"{len(self.values) - len(self.changes)} loaded values were already set."]
 
 
 def _is_number(value):
@@ -122,7 +145,8 @@ def _read_log(path):
         raise SettingsLogError("no 'meta' section: not a settings log of this addon")
     schema = meta.get("schema_version")
     if not (isinstance(schema, int) and not isinstance(schema, bool) and schema in SCHEMAS):
-        raise SettingsLogError(f"unknown schema version {json.dumps(schema)} (this addon reads 1 to 3)")
+        raise SettingsLogError(f"unknown schema version {json.dumps(schema)} (this addon reads {SCHEMAS[0]} to "
+                               f"{SCHEMAS[-1]})")
     if meta.get("trigger") not in LOG_KINDS:
         raise SettingsLogError(f"unknown kind of log {json.dumps(meta.get('trigger'))}")
     return data
@@ -137,6 +161,14 @@ def _existing_dir(raw, abspath):
         return None
     resolved = os.path.normpath(abspath(raw))
     return resolved if os.path.isdir(resolved) else None
+
+
+def _case_import_dir(raw, abspath):
+    """The resolved Import folder of a case, or None. The default '//' (next to the .blend) means no
+    Import folder, as in session_log.resolve_case_dir."""
+    if (raw or "").strip() in ("", "//"):
+        return None
+    return _existing_dir(raw, abspath)
 
 
 def _text(value):
@@ -164,8 +196,8 @@ def _landmarks(log):
 
 
 def _plan_case_settings(data, current, abspath, plan):
-    """Export or session log: folders, valves, setup variables and approach. Returns the Import folder
-    that holds after loading (resolved), or None."""
+    """Export or session log: folders, valves, setup variables and approach. Returns this log's Import
+    folder (resolved), or None if it is not found or only '//'."""
     for prop, key in FOLDERS:
         raw = _get(data, key, "text")
         if raw is _MISSING:
@@ -183,26 +215,27 @@ def _plan_case_settings(data, current, abspath, plan):
             plan.values[prop] = value
 
     if data["meta"]["schema_version"] == 1:
-        plan.notes.append("This log is from before the valve fix (schema 1): its valve sizes are out of date "
+        plan.notes.append("This log is from before the valve size fix (schema 1): its valve sizes are out of date "
                           "and were not loaded.")
-        plan.todo.append(TODO_VALVE_SIZES)
+        plan.valve_sizes_out_of_date = True
     else:
         for prop, key in SIZES:
             value = _get(data, key, "number")
             if value is _MISSING:
                 plan.kept.append(f"{key}: missing in the log")
-                if TODO_VALVE_SIZES not in plan.todo:
-                    plan.todo.append(TODO_VALVE_SIZES)
+                plan.valve_sizes_out_of_date = True
             else:
                 plan.values[prop] = value
         r_target = _get(data, "valves.R_target", "number")
         if r_target is not _MISSING and not _same(r_target, current.get("valve_R_target")):
             plan.kept.append(f"valves.R_target: {r_target:g} in the log, {current.get('valve_R_target'):g} in the "
                              "scene (model parameter, not loaded)")
+    if plan.valve_sizes_out_of_date:
+        plan.todo.append(TODO_VALVE_SIZES)
 
-    # The landmarks come from the rotation log of the Import folder that holds after loading, never
-    # from the rotation part of this log: the scene may have carried it over from another case.
-    import_dir = _existing_dir(plan.values.get("ventricle_import_dir", current.get("ventricle_import_dir", "")), abspath)
+    # The landmarks come from the rotation log of this log's own Import folder, never from the rotation
+    # part of this log or from the scene's Import folder: both may belong to another case.
+    import_dir = _case_import_dir(plan.values.get("ventricle_import_dir"), abspath)
     rotation_log = os.path.join(import_dir, ROTATION_LOG) if import_dir else None
     if rotation_log and os.path.isfile(rotation_log):
         try:
@@ -225,14 +258,21 @@ def plan_load(path, current, abspath):
     """
     data = _read_log(path)
     meta = data["meta"]
-    plan = LoadPlan(values={}, header=[])
+    plan = LoadPlan(values={}, header=[], path=path)
     if meta["trigger"] == "rotate":  # only the landmarks
         plan.values.update(_landmarks(data))
         plan.todo.append(TODO_ROTATE)
-        import_dir = _existing_dir(current.get("ventricle_import_dir", ""), abspath)
+        # The case is where the file lies (<case>/<Import>/rotated/), not the scene's Import folder.
+        folder = os.path.dirname(os.path.abspath(path))
+        import_dir = os.path.dirname(folder) if os.path.basename(folder) == "rotated" else None
+        scene_dir = _case_import_dir(current.get("ventricle_import_dir"), abspath)
+        if not (import_dir and scene_dir and os.path.normcase(import_dir) == os.path.normcase(scene_dir)):
+            plan.notes.append("This rotation log is not in the current Import folder: its landmarks may belong to "
+                              "another case.")
     else:
         import_dir = _plan_case_settings(data, current, abspath, plan)
 
+    plan.import_dir = import_dir
     case = os.path.basename(os.path.dirname(import_dir)) if import_dir else "unknown (no valid Import folder)"
     plan.header = [
         f"Case: {case}",

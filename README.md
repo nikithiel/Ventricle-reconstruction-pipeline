@@ -59,7 +59,7 @@ main(args=['install','pandas'])
 ## Installation of Blender case with addons
 In Blender go to Edit→Preferences→Add-ons:
 - Search *LoopTools* → check *Mesh: LoopTools* → Save Preferences.
-- Install stl-plot.py, valve_geometry.py, calculate_valve_diameters.py and then ventricle-reconstruction-pipeline.py (**in this order**) from repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
+- Install stl_plot.py, valve_geometry.py, calculate_valve_diameters.py, session_log.py, load_settings.py and then geometrical_heart_reconstruction.py (**in this order**) from the `addons` folder of the repository → search *Geometrical heart* → check *Add Mesh: Geometrical heart reconstruction*
 - Open the GVR-Pipeline.blend scene from the repository → after that a new category should appear on the right side of the 3D Viewport called 'GVR-Pipeline'. Clicking it will open panels containing buttons, etc. used for the pipeline.
 ## Merge imperm into res
 The porous valve zones used to have three parts: *perm*, *res* and *imperm* (the outer band at the annulus). *imperm* is now part of *res*: the CFD lets the flow pass the whole valve disc, and *Calculate valve sizes* scales that disc to the fitted area. A `GVR-Pipeline.blend` from before this change still holds the templates `A3_*_imperm`, `A4_*_imperm` and `A5_AV_imperm`, and the pipeline stops with an error until they are merged. Do this once:
@@ -75,7 +75,7 @@ Video-tutorial: https://www.youtube.com/watch?v=0sduwcDeSm8 \
 Installation description: https://www.youtube.com/watch?v=cKEKuLW4oYE \
 → Open blend-file provided in the repository and follow the following steps.
 ## Load settings
-`Load settings` at the top of the File Management panel loads all settings of a case from a log, so switching between cases or rebuilding a case needs no retyping. Pick the log in the file browser; it shows `*.json` files and starts in the case folder of the current `Import folder`. The pipeline writes three logs:
+`Load settings` at the top of the File Management panel loads all settings of a case from an export, session or rotation log, so switching between cases or rebuilding a case needs no retyping. Pick the log in the file browser; it shows `*.json` files and starts in the case folder of the current `Import folder`. The pipeline writes three logs:
 - **Export log:** `gvr_settings.json` in the `Export folder`, written by `Export ventricle`;
 - **Session log:** `Session_Logs/session_<date>_<time>.json` in the case folder (one level above the `Import folder`), kept up to date while Blender runs;
 - **Rotation log:** `rotated/gvr_rotation.json` in the `Import folder`, written by `Translate and rotate`.
@@ -87,7 +87,7 @@ What is loaded, always all at once:
 
 What is not loaded: R_target and the valve area check tolerance (model parameters, the same for all cases; a different R_target in the log is reported), the values the pipeline steps compute themselves, the positions after the rotation, and the check boxes of the live comparison.
 
-The landmarks (basal, apex, septum) come from the rotation log of the loaded `Import folder`, never from the rotation part of an export or session log. After a fresh import, `Translate and rotate` then repeats the old rotation without picking nodes. Press it only after a fresh import, otherwise the geometry is rotated twice. Without a rotation log, pick the landmarks by hand. A rotation log chosen directly sets only the landmarks.
+The landmarks (basal, apex, septum) come from the rotation log in the `Import folder` of the loaded log, never from the rotation part of an export or session log and never from another case. After a fresh import, `Translate and rotate` then repeats the old rotation without picking nodes. Press it only after a fresh import, otherwise the geometry is rotated twice. Without a rotation log, or if the `Import folder` of the log is not found, pick the landmarks by hand. A rotation log chosen directly sets only the landmarks; the window warns if it is not in the current `Import folder`.
 
 After loading, the window *Settings loaded* shows the case, the file, the kind of log, its date, what was kept and what is left to do. The console lists every changed value as `old -> new`. `OK` closes the window and leaves the steps for later. A broken or foreign file changes nothing, and `Ctrl+Z` undoes the whole load.
 

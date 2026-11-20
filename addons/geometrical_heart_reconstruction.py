@@ -2450,21 +2450,9 @@ class MESH_OT_load_settings(bpy.types.Operator):
         for name, value in plan.values.items():
             setattr(scene, name, value)
 
-        cons_print(f"Loaded from: {self.filepath}")
-        for line in plan.header + plan.notes:
+        for line in plan.console_lines():
             cons_print(line)
-        for title, lines in (("Changed", plan.changes), ("Kept", plan.kept), ("To do", plan.todo)):
-            if lines:
-                cons_print(f"{title}:")
-                for line in lines:
-                    cons_print(f"  {line}")
-        cons_print(f"{len(plan.values) - len(plan.changes)} loaded values were already set.")
-
-        msg = f"Load settings: {plan.header[-1]} from '{os.path.basename(self.filepath)}'"
-        if plan.kept or plan.notes:
-            self.report({'WARNING'}, msg + ", some were not loaded (see the console).")
-        else:
-            self.report({'INFO'}, msg + ".")
+        self.report({'INFO'}, plan.status())  # a WARNING would open a second popup over the window
         _loaded_plan = plan
         bpy.ops.heart.settings_loaded('INVOKE_DEFAULT')
         return {'FINISHED'}
@@ -2498,8 +2486,7 @@ class MESH_OT_settings_loaded(bpy.types.Operator):
                 for part in textwrap.wrap(line, 80):
                     box.label(text=part)
                 if line == load_settings.TODO_VALVE_SIZES:
-                    raw_dir = (context.scene.ventricle_import_dir or "").strip()
-                    if raw_dir and os.path.isdir(bpy.path.abspath(raw_dir)):
+                    if plan.import_dir:  # the loaded case's Import folder, as Calculate valve sizes reads it
                         box.operator('heart.calculate_valve_diameter', text="Calculate valve sizes now", icon='MESH_CIRCLE')
                     else:
                         box.label(text="Set the Import folder first", icon='ERROR')

@@ -77,6 +77,19 @@ def test_example_log() -> None:
           "the shortened example folders cannot be resolved and are kept")
     check(len(v) == 18, f"18 values: 4 valve vectors, 13 setup variables, approach (got {len(v)})")
     check(ls.TODO_PICK_LANDMARKS in plan.todo, "no rotation log: 'Pick the landmarks by hand'")
+    check(plan.valve_sizes_out_of_date is True and plan.import_dir is None,
+          "window: valve sizes out of date, no Import folder ('Set the Import folder first' instead of the button)")
+    status = plan.status()
+    check(status.startswith("Load settings: 18 settings loaded from 'session_2026-10-06_13-45-54.json'")
+          and "valve sizes out of date" in status and "landmarks not loaded" in status and "3 kept" in status,
+          f"status line names the count, the file, the old valve sizes, the landmarks and the 3 kept folders ({status})")
+    lines = plan.console_lines()
+    titles = [line for line in lines if line in ("Changed:", "Kept:", "To do:")]
+    check(lines[0] == f"Loaded from: {EXAMPLE_LOG}" and "Case: unknown (no valid Import folder)" in lines
+          and any("schema 1" in line for line in lines) and titles == ["Changed:", "Kept:", "To do:"]
+          and "  approach: 3 -> 4" in lines and "  Calculate valve sizes" in lines
+          and any(line.startswith("  files.import_dir") for line in lines),
+          "console: file, header, schema 1 note, then Changed, Kept and To do with indented lines")
     check("approach: 3 -> 4" in plan.changes and "translation_mitral: (0, 0, 1) -> (0, -4, 50.5)" in plan.changes
           and "time_rr: 0.6 -> 0.557" in plan.changes and not any("poisson_depth" in c for c in plan.changes),
           f"console: old -> new for changed values only ({plan.changes[:3]} ...)")
@@ -129,7 +142,7 @@ LANDMARKS = ((1.5, 2.5, 60.0), (3.0, -1.0, 2.0), (-20.0, 4.0, 45.0))
 
 def test_example_in_case(tmp) -> None:
     print("-- T4.2 example log in a case folder with real folders and a rotation log")
-    case = make_case(tmp, "Case_P15", LANDMARKS)
+    case = make_case(tmp, "Case_example", LANDMARKS)
     log = write_log(case / "Session_Logs" / "session_x.json", example_with(
         files={"import_dir": "//STL/", "export_dir": "//export/"},
         comparison={"plot_input_path": "//export/", "live_compare": True, "live_delete_temp": True}))
@@ -141,8 +154,10 @@ def test_example_in_case(tmp) -> None:
           "landmarks from STL/rotated/gvr_rotation.json, not from the rotation part of the log")
     check(ls.TODO_ROTATE in plan.todo and ls.TODO_PICK_LANDMARKS not in plan.todo,
           "To do: 'Translate and rotate' only after a fresh import")
-    check("Case: Case_P15" in plan.header and len(v) == 24 and not plan.kept and not NEVER & set(v),
+    check("Case: Case_example" in plan.header and len(v) == 24 and not plan.kept and not NEVER & set(v),
           f"case named after the case folder, 24 values, nothing kept (got {len(v)}, kept {plan.kept})")
+    check(plan.valve_sizes_out_of_date is True and plan.import_dir == str(case / "STL"),
+          f"window: valve sizes out of date, the Import folder exists ('Calculate valve sizes now') ({plan.import_dir})")
 
 
 CASE_SETTINGS = {
@@ -190,22 +205,34 @@ def test_round_trip(tmp) -> None:
     wrong = [p for p in CASE_SETTINGS if not same_value(plan.values.get(p), expected[p])]
     check(not wrong, f"every case setting comes back with the value of the mock scene (wrong: {wrong})")
     check(not plan.changes, f"the scene already holds these values: no change for the console ({plan.changes})")
+    lines = plan.console_lines()
+    check("Changed:" not in lines and lines[-1] == "27 loaded values were already set.",
+          f"console: no 'Changed' section, all 27 values already set ({lines[-1]})")
     check(len(plan.kept) == 1 and "R_target" in plan.kept[0] and "1.25" in plan.kept[0] and "1.3" in plan.kept[0],
           f"R_target 1.25 in the log vs. 1.3 in the scene: only a note in 'Kept' ({plan.kept})")
     check("valve_check_tolerance" not in plan.values and "valve_R_target" not in plan.values,
           "the model parameters R_target and the tolerance are never planned")
-    check(not plan.notes and ls.TODO_VALVE_SIZES not in plan.todo and "Export log" in " ".join(plan.header),
-          "schema 3: no schema 1 note, no 'Calculate valve sizes', kind 'Export log'")
+    check(not plan.notes and ls.TODO_VALVE_SIZES not in plan.todo and "Export log" in " ".join(plan.header)
+          and plan.valve_sizes_out_of_date is False,
+          "schema 3: no schema 1 note, no 'Calculate valve sizes', valve sizes up to date, kind 'Export log'")
 
 
 def test_rotation_log(tmp) -> None:
     print("-- T4.4 a rotation log chosen directly")
     case = make_case(tmp, "Case_rotation", LANDMARKS)
-    plan = ls.plan_load(str(case / "STL" / "rotated" / "gvr_rotation.json"), CURRENT, identity)
+    rotation_log = str(case / "STL" / "rotated" / "gvr_rotation.json")
+    plan = ls.plan_load(rotation_log, CURRENT | {"ventricle_import_dir": str(case / "STL")}, identity)
     check(plan.values == dict(zip(("pos_top", "pos_bot", "pos_septum"), LANDMARKS)),
           f"only pos_top, pos_bot and pos_septum are planned ({sorted(plan.values)})")
     check("Rotation log" in " ".join(plan.header) and ls.TODO_ROTATE in plan.todo and not plan.kept and not plan.notes,
-          "kind 'Rotation log', To do 'Translate and rotate' only after a fresh import, nothing kept")
+          "kind 'Rotation log', To do 'Translate and rotate' only after a fresh import, nothing kept, no note")
+    check("Case: Case_rotation" in plan.header, f"case named after the folder above <Import>/rotated ({plan.header[0]})")
+    check(plan.status() == "Load settings: 3 settings loaded from 'gvr_rotation.json'.",
+          f"status line with nothing left out: only the count and the file ({plan.status()})")
+
+    plan = ls.plan_load(rotation_log, CURRENT, identity)  # the scene is on another case
+    check("Case: Case_rotation" in plan.header and any("current Import folder" in n for n in plan.notes),
+          f"the case still comes from the file location, a note says it is not the current Import folder ({plan.notes})")
 
 
 def test_missing_value(tmp) -> None:
@@ -265,6 +292,25 @@ def test_unreadable_rotation_log(tmp) -> None:
     check(len(plan.values) == 24 and plan.values.get("approach") == 5, "the other 24 case settings are planned")
 
 
+def test_case_only_from_the_log(tmp) -> None:
+    print("-- T4.9 landmarks and case name only from the Import folder of the loaded log")
+    other = make_case(tmp, "Case_in_scene", LANDMARKS)
+    scene_on_other = CURRENT | {"ventricle_import_dir": str(other / "STL")}
+    plan = ls.plan_load(str(EXAMPLE_LOG), scene_on_other, identity)
+    check(not {"pos_top", "pos_bot", "pos_septum"} & set(plan.values) and ls.TODO_PICK_LANDMARKS in plan.todo
+          and ls.TODO_ROTATE not in plan.todo,
+          "the log's Import folder is not found: no landmarks of the scene's case, To do 'Pick the landmarks by hand'")
+    check(any(h.startswith("Case: unknown") for h in plan.header), f"the case is unknown, not the scene's ({plan.header})")
+
+    print("-- T4.9 the Import folder '//' (the default) counts as no Import folder")
+    case = make_case(tmp, "Case_blend_folder", LANDMARKS)
+    log = write_log(case / "Session_Logs" / "session_default.json", example_with(files={"import_dir": "//"}))
+    plan = ls.plan_load(log, CURRENT, blend_in(case / "STL"))  # '//' resolves to a folder with a rotation log
+    check(not {"pos_top", "pos_bot", "pos_septum"} & set(plan.values) and ls.TODO_PICK_LANDMARKS in plan.todo
+          and any(h.startswith("Case: unknown") for h in plan.header) and plan.import_dir is None,
+          f"no landmarks, case unknown, To do 'Pick the landmarks by hand', no button ({plan.header[0]})")
+
+
 def registered_properties() -> set:
     """Keys of scene_properties in the main addon, read from its source without Blender."""
     tree = ast.parse((REPO / "addons/geometrical_heart_reconstruction.py").read_text(encoding="utf-8"))
@@ -297,6 +343,7 @@ def main() -> int:
         test_missing_value(tmp)
         test_broken_files(tmp)
         test_unreadable_rotation_log(tmp)
+        test_case_only_from_the_log(tmp)
     test_property_names()
     print()
     print(f"{len(FAILURES)} failure(s)" if FAILURES else "all checks passed")
