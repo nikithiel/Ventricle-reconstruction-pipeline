@@ -1465,7 +1465,7 @@ class MESH_OT_create_basal(bpy.types.Operator):
         selected_names = [object.name for object in context.selected_objects]
         selected_names = sorted(selected_names, key=get_frame_number)
         # Subdivide the first object before morphing
-        obj = bpy.data.objects.get(selected_names[5])
+        obj = bpy.data.objects.get(selected_names[context.scene.basal_ref])
         
         obj = bpy.data.objects.get(selected_names[context.scene.basal_ref]) # Only performs gradual-remesh on the reference object. Otherwise it's really heavy
         gradual_remesh(context,obj)
@@ -2315,10 +2315,13 @@ class MESH_OT_Add_Vessels_Valves(bpy.types.Operator):
         pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
         
         for i in range(len(selected_names)-1,-1,-1):
-            if i < len(selected_names) - 1:
+            """if i < len(selected_names) - 1:
                 mitral_diff = np.array(pos_matrix_mitral)[i - 1] - np.array(pos_matrix_mitral)[i]
                 aortic_diff = np.array(pos_matrix_aortic)[i - 1] - np.array(pos_matrix_aortic)[i]
-                update_value_for_translation(context, mitral_diff, aortic_diff)
+                update_value_for_translation(context, mitral_diff, aortic_diff)"""
+            obj = bpy.data.objects.get(selected_names[i])
+            context.scene.translation_mitral = obj["translation_mitral"]
+            context.scene.translation_aortic = obj["translation_aortic"]
             add_vessels_and_valves(context, id=f"{i}")
         return{'FINISHED'}
     
@@ -2741,6 +2744,7 @@ def test_function(context):
     cobj = selected_objects[0]
     cons_print(cobj["translation_mitral"])
     context.scene.translation_mitral = cobj["translation_mitral"]
+    context.scene.translation_aortic = cobj["translation_aortic"]
     #smooth_vertex_group(cobj ,"body", factor=1, iter=3, use_laplacian=False)
     #extract_vertex_group_object(cobj, "body", cobj.name + "_body")
     #gradual_remesh(context,cobj)
