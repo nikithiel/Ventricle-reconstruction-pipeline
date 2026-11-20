@@ -910,7 +910,7 @@ def remove_multiple_basal_region(context):
         reference_name = find_reference_ventricle_max(selected_objects)
     context.scene.reference_object_name = reference_name
     reference_copy = copy_object(reference_name, 'reference')
-    cons_print(f"Chosen reference object: {context.scene.reference_object_name}")
+    #cons_print(f"Chosen reference object: {context.scene.reference_object_name}")
 
     for obj in selected_objects: obj.select_set(False) # Deselect objects.
     # Basal region removal. First for reference, then remaining objects.
@@ -2311,14 +2311,8 @@ class MESH_OT_Add_Vessels_Valves(bpy.types.Operator):
         # Get all the ventricles and sort their names.
         selected_names = [object.name for object in context.selected_objects]
         selected_names = sorted(selected_names, key=get_frame_number)
-        pos_matrix_mitral = np.array(context.object["mitral_position_matrix"])
-        pos_matrix_aortic = np.array(context.object["aortic_position_matrix"])
         
-        for i in range(len(selected_names)-1,-1,-1):
-            """if i < len(selected_names) - 1:
-                mitral_diff = np.array(pos_matrix_mitral)[i - 1] - np.array(pos_matrix_mitral)[i]
-                aortic_diff = np.array(pos_matrix_aortic)[i - 1] - np.array(pos_matrix_aortic)[i]
-                update_value_for_translation(context, mitral_diff, aortic_diff)"""
+        for i in range(0,len(selected_names)):
             obj = bpy.data.objects.get(selected_names[i])
             context.scene.translation_mitral = obj["translation_mitral"]
             context.scene.translation_aortic = obj["translation_aortic"]
@@ -2422,39 +2416,50 @@ class MESH_OT_Quick_Recon(bpy.types.Operator):
         # guard below still needs to compare all frames against each other.
         ventricle_names = [obj.name for obj in find_ventricle_objects(context.selected_objects)]
         shift_distances = remove_multiple_basal_region(context) # Remove old basal region.
-        if not mesh_create_basal_batch(context): 
-            print("Not working or not returning")
-            return{'CANCELLED'}# Operations to create basal region of the ventricle containing valve orifices.
-        if not mesh_connect_apical_and_basal_pairs(context): 
-            print("Something went wrong here")
-            return {'CANCELLED'} # Connect apical regions with corresponding bassal regions.
-        add_vessels_and_valves(context) # Add surrounding objects including aorta, atrium and valves.
+        
+        
+        #TODO: ALL THE CREATE BASAL OPERATION. WILL BE MOVED TO ANOTHER FUNCTION LATER
+        _, pos_matrices = mesh_create_basal_batch(context)
+        
+        # Saves all the currently selected object just in case
+        selected_names = [object.name for object in context.selected_objects]
+        selected_names = sorted(selected_names, key=get_frame_number)
+        # Subdivide the first object before morphing
+        obj = bpy.data.objects.get(selected_names[context.scene.basal_ref])
+        
+        obj = bpy.data.objects.get(selected_names[context.scene.basal_ref]) # Only performs gradual-remesh on the reference object. Otherwise it's really heavy
+        gradual_remesh(context,obj)
+        # Performs the gradual remeshing
+        for i in range(0,len(selected_names)):
+            obj = bpy.data.objects.get(selected_names[i]) # Reassign object as it was replaced during remesh, even if not it will not matter
+            make_custom_group(context,obj, exclude_groups=["lower_basal_edge_loop","MV","AV"], name='body')
+        shift_shrinkwrap_topology_batch(context, pos_matrices, selected_names)
+        if context.scene.use_basal_smoothing:
+            for i in range(0, len(selected_names)):
+                smooth_vertex_group(bpy.data.objects.get(selected_names[i]),"body", factor=context.scene.basal_sm_factor, iter=context.scene.basal_sm_iter, use_laplacian=False)
+        
+        #TODO: CONNECT OPERATION PLEASE REFACTOR INTO A CLEAR SINGLE FUNCTION LATER
+        _, finished_names = mesh_connect_apical_and_basal_pairs(context)
+        for name in finished_names:
+            obj = bpy.data.objects.get(name)
+            obj.select_set(True)
+        
+        #TODO: VALVE FUNCTION PLEASE REFACTOR INTO A CLEAR SINGLE FUNCTION LATER
+        selected_names = [object.name for object in context.selected_objects]
+        selected_names = sorted(selected_names, key=get_frame_number)
+        
+        for i in range(0,len(selected_names)):
+            obj = bpy.data.objects.get(selected_names[i])
+            context.scene.translation_mitral = obj["translation_mitral"]
+            context.scene.translation_aortic = obj["translation_aortic"]
+            add_vessels_and_valves(context, id=f"{i}")
         ventricles = [bpy.data.objects[name] for name in ventricle_names if name in bpy.data.objects]
         error = check_pipeline_triangulated(context, ventricles)
+        
         # reselect all the ventricles
         for obj in ventricles:
             obj.select_set(True)
-
-        # Unshift everything afterwards
-        unshift_everything_longitudinally(context,context.selected_objects, shift_distances)
-
-        if error:
-            cons_print(error)
-            self.report({'ERROR'}, error)
-            return {'CANCELLED'}
-        ventricles = [bpy.data.objects[name] for name in ventricle_names if name in bpy.data.objects]
-        error = check_pipeline_triangulated(context, ventricles)
-        # reselect all the ventricles
-        for obj in ventricles:
-            obj.select_set(True)
-
-        # Unshift everything afterwards
-        unshift_everything_longitudinally(context,context.selected_objects, shift_distances)
-
-        if error:
-            cons_print(error)
-            self.report({'ERROR'}, error)
-            return {'CANCELLED'}
+            
         return{'FINISHED'} 
 
 def cleanup_basal_region(context):
@@ -2744,7 +2749,7 @@ def test_function(context):
     cobj = selected_objects[0]
     cons_print(cobj["translation_mitral"])
     context.scene.translation_mitral = cobj["translation_mitral"]
-    context.scene.translation_aortic = cobj["translation_aortic"]
+    context.scene.translation_aortic = cobj["translation_aortic "]
     #smooth_vertex_group(cobj ,"body", factor=1, iter=3, use_laplacian=False)
     #extract_vertex_group_object(cobj, "body", cobj.name + "_body")
     #gradual_remesh(context,cobj)
