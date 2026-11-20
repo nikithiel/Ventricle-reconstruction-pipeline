@@ -74,6 +74,24 @@ Case files that were copied from an older `GVR-Pipeline.blend` need the same ste
 Video-tutorial: https://www.youtube.com/watch?v=0sduwcDeSm8 \
 Installation description: https://www.youtube.com/watch?v=cKEKuLW4oYE \
 → Open blend-file provided in the repository and follow the following steps.
+## Load settings
+`Load settings` at the top of the File Management panel loads all settings of a case from a log, so switching between cases or rebuilding a case needs no retyping. Pick the log in the file browser; it shows `*.json` files and starts in the case folder of the current `Import folder`. The pipeline writes three logs:
+- **Export log:** `gvr_settings.json` in the `Export folder`, written by `Export ventricle`;
+- **Session log:** `Session_Logs/session_<date>_<time>.json` in the case folder (one level above the `Import folder`), kept up to date while Blender runs;
+- **Rotation log:** `rotated/gvr_rotation.json` in the `Import folder`, written by `Translate and rotate`.
+
+What is loaded, always all at once:
+- `Import folder`, `Export folder` and `Processed geometries`, each only if the folder exists on this computer;
+- translation and angle of both valves, MV width, MV depth and AV diameter;
+- the 13 algorithm setup variables and the approach.
+
+What is not loaded: R_target and the valve area check tolerance (model parameters, the same for all cases; a different R_target in the log is reported), the values the pipeline steps compute themselves, the positions after the rotation, and the check boxes of the live comparison.
+
+The landmarks (basal, apex, septum) come from the rotation log of the loaded `Import folder`, never from the rotation part of an export or session log. After a fresh import, `Translate and rotate` then repeats the old rotation without picking nodes. Press it only after a fresh import, otherwise the geometry is rotated twice. Without a rotation log, pick the landmarks by hand. A rotation log chosen directly sets only the landmarks.
+
+After loading, the window *Settings loaded* shows the case, the file, the kind of log, its date, what was kept and what is left to do. The console lists every changed value as `old -> new`. `OK` closes the window and leaves the steps for later. A broken or foreign file changes nothing, and `Ctrl+Z` undoes the whole load.
+
+Logs written before the valve size fix (schema 1) hold out-of-date valve sizes, so their sizes are not loaded. Run `Calculate valve sizes` again; the window offers it as a button.
 ## Import ventricle geometries 
 ![Image of the import folder](/readme_images/Import.png)\
 In the File Panel select an import folder either by manually input or by clicking the folder icon on the right side to browse through the file explorer. 

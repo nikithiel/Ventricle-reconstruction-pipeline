@@ -1,7 +1,7 @@
 bl_info = {
     "name" : "Geometrical heart reconstrucion", 
     "author" : "Daniel Verhuelsdonk",
-    "version" : (2, 1),
+    "version" : (2, 2),
     "blender" : (3, 1, 0),
     "location" : "Operator Search",
     "description": "Panel and operators to geometrically reconstruct the upper heart shape",
@@ -24,6 +24,7 @@ import uuid
 import sys
 import subprocess
 import importlib.util
+import textwrap
 import time
 import warnings
 
@@ -39,6 +40,7 @@ from pathlib import Path
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
 from valve_geometry import run_valve_area_check, template_shapes, mv_stretch, av_stretch, ratio_in_band, BAND_TEXT, TemplateError
+import load_settings
 
 try: # A broken settings log must never keep the addon from registering.
     import session_log
@@ -2160,6 +2162,10 @@ class PANEL_Files(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
 
+        # Load all case settings from a log: the first step when switching cases
+        row = layout.row()
+        row.operator('heart.load_settings', text="Load settings", icon='PRESET')
+
         # Import button
         row = layout.row()
         layout.operator('heart.import_ventricle', text= "Import ventricles", icon= "IMPORT")
@@ -2406,6 +2412,103 @@ class PANEL_Dev_tools(bpy.types.Panel):
 
 
 #----
+_loaded_plan = None  # The plan of the last 'Load settings', shown by the 'Settings loaded' window.
+
+class MESH_OT_load_settings(bpy.types.Operator):
+    """Load all case settings from an export, session or rotation log (.json) into the scene"""
+    bl_idname = 'heart.load_settings'
+    bl_label = 'Load settings'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    filepath: bpy.props.StringProperty(name="File path", description="Export, session or rotation log to load", subtype='FILE_PATH')
+    filter_glob: bpy.props.StringProperty(default="*.json", options={'HIDDEN'})
+
+    def invoke(self, context, event):
+        # Start in the case folder of the current Import folder, else next to the .blend.
+        start = (session_log.resolve_case_dir(context.scene) if session_log else None) or os.path.dirname(bpy.data.filepath)
+        if start:
+            self.filepath = os.path.join(start, "")
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        global _loaded_plan
+        _cons_rule("Load settings")
+        scene = context.scene
+        current = {}
+        for name in scene_properties:
+            value = getattr(scene, name)
+            current[name] = value if isinstance(value, (str, bool, int, float)) else tuple(value) # Copy vectors before they change.
+        try:
+            plan = load_settings.plan_load(self.filepath, current, bpy.path.abspath)
+        except load_settings.SettingsLogError as err:
+            msg = f"Load settings: nothing changed, '{self.filepath}' cannot be loaded: {err}"
+            cons_print(msg)
+            self.report({'ERROR'}, msg)
+            return {'CANCELLED'}
+
+        for name, value in plan.values.items():
+            setattr(scene, name, value)
+
+        cons_print(f"Loaded from: {self.filepath}")
+        for line in plan.header + plan.notes:
+            cons_print(line)
+        for title, lines in (("Changed", plan.changes), ("Kept", plan.kept), ("To do", plan.todo)):
+            if lines:
+                cons_print(f"{title}:")
+                for line in lines:
+                    cons_print(f"  {line}")
+        cons_print(f"{len(plan.values) - len(plan.changes)} loaded values were already set.")
+
+        msg = f"Load settings: {plan.header[-1]} from '{os.path.basename(self.filepath)}'"
+        if plan.kept or plan.notes:
+            self.report({'WARNING'}, msg + ", some were not loaded (see the console).")
+        else:
+            self.report({'INFO'}, msg + ".")
+        _loaded_plan = plan
+        bpy.ops.heart.settings_loaded('INVOKE_DEFAULT')
+        return {'FINISHED'}
+
+class MESH_OT_settings_loaded(bpy.types.Operator):
+    """Show what 'Load settings' loaded, what it kept and what is left to do"""
+    bl_idname = 'heart.settings_loaded'
+    bl_label = 'Settings loaded'
+    bl_options = {'INTERNAL'}
+
+    def invoke(self, context, event):
+        # Blender 3.1 dialogs have a fixed 'OK' button (no confirm_text before 4.1): OK means 'not now'.
+        return context.window_manager.invoke_props_dialog(self, width=600)
+
+    def draw(self, context):
+        layout = self.layout
+        plan = _loaded_plan
+        if plan is None:
+            return
+        for line in plan.header:
+            layout.label(text=line)
+        for line in plan.notes:
+            for part in textwrap.wrap(line, 80):
+                layout.label(text=part, icon='ERROR')
+        for title, lines in (("Kept", plan.kept), ("To do", plan.todo)):
+            if not lines:
+                continue
+            box = layout.box()
+            box.label(text=title)
+            for line in lines:
+                for part in textwrap.wrap(line, 80):
+                    box.label(text=part)
+                if line == load_settings.TODO_VALVE_SIZES:
+                    raw_dir = (context.scene.ventricle_import_dir or "").strip()
+                    if raw_dir and os.path.isdir(bpy.path.abspath(raw_dir)):
+                        box.operator('heart.calculate_valve_diameter', text="Calculate valve sizes now", icon='MESH_CIRCLE')
+                    else:
+                        box.label(text="Set the Import folder first", icon='ERROR')
+        if plan.todo:
+            layout.label(text="OK closes this window: do the steps later, the console keeps this list.")
+
+    def execute(self, context):
+        return {'FINISHED'}
+
 class MESH_OT_import_ventricle(bpy.types.Operator):
     """Imports all indexed stl files contained within the import directory"""
     bl_idname = 'heart.import_ventricle'
@@ -3272,7 +3375,7 @@ def BvH_transform(source,target):
             v.co = source.matrix_world.inverted() @ loc
     
 classes = [
-    PANEL_Files, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
+    PANEL_Files, MESH_OT_load_settings, MESH_OT_settings_loaded, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 
     MESH_OT_Ventricle_Sort, MESH_OT_Quick_Recon, MESH_OT_remove_basal,
     MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,

@@ -24,7 +24,7 @@ import time
 
 import bpy
 
-SCHEMA_VERSION = 2  # 2: valves log width/depth/diameter in mm and the stretch factors instead of radii
+SCHEMA_VERSION = 3  # 2: valves log width/depth/diameter in mm and the stretch factors instead of radii; 3: plus the valve area check tolerance
 LOG_DIRNAME = "Session_Logs"
 FULL_LOG_NAME = "gvr_settings.json"
 ROTATION_LOG_NAME = "gvr_rotation.json"
@@ -138,6 +138,7 @@ def _build_valves_section(scene):
 
     return {
         "R_target": _f(scene.valve_R_target),
+        "area_check_tolerance_percent": _f(scene.valve_check_tolerance),
         "mitral": {
             "translation_mm": _v(scene.translation_mitral),
             "angle_deg": _v(scene.angle_mitral),
