@@ -191,6 +191,8 @@ Connectivity/
 !/dataset/example/STL/rotated/Connectivity/
 !/dataset/example/export/
 !/dataset/example/export/Connectivity/
+# Session logs the add-on writes while GVR-Pipeline.blend points at the example case (the tracked one stays).
+/dataset/example/Session_Logs/session_*.json
 
 # Temporary files
 *.tmp
