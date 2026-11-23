@@ -9,8 +9,9 @@ Enable the hook once per clone:  git config core.hooksPath .githooks
 2. T1/T2: tools/test_valve_area_check.py (standard library);
 3. T3: tools/test_calculate_valve_diameters.py, run through uv (skipped without uv);
 4. T4: tools/test_load_settings.py (standard library);
-5. no undefined names (pyflakes through uv, skipped without uv);
-6. the staged changes add no private paths (network shares, Windows user folders, sandbox
+5. tools/blend_settings.py --self-test reads the settings and objects of GVR-Pipeline.blend;
+6. no undefined names (pyflakes through uv, skipped without uv);
+7. the staged changes add no private paths (network shares, Windows user folders, sandbox
    paths) and no references to the untracked folders .private/ and reports/.
    Text files: added lines only. .blend files: strings that the HEAD version does not have.
 """
@@ -105,6 +106,8 @@ def main():
         ("T3 tools/test_calculate_valve_diameters.py",
          lambda: run_test(uv_python(T3_PACKAGES, ["tools/test_calculate_valve_diameters.py"])) if has_uv else None),
         ("T4 tools/test_load_settings.py", lambda: run_test([sys.executable, "tools/test_load_settings.py"])),
+        ("tools/blend_settings.py --self-test",
+         lambda: run_test([sys.executable, "tools/blend_settings.py", "--self-test"])),
         ("undefined names (pyflakes)", lambda: check_undefined_names() if has_uv else None),
         ("staged changes: no private paths", check_staged),
     ]
