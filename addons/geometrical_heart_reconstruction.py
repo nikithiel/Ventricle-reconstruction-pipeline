@@ -2475,8 +2475,8 @@ class MESH_OT_settings_loaded(bpy.types.Operator):
         for line in plan.header:
             layout.label(text=line)
         for line in plan.notes:
-            for part in textwrap.wrap(line, 80):
-                layout.label(text=part, icon='ERROR')
+            for i, part in enumerate(textwrap.wrap(line, 80)):
+                layout.label(text=part, icon='ERROR' if i == 0 else 'BLANK1')  # one icon per note, not per line
         for title, lines in (("Kept", plan.kept), ("To do", plan.todo)):
             if not lines:
                 continue
