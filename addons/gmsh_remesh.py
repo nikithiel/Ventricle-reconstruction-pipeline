@@ -1,53 +1,44 @@
 # -*- coding: utf-8 -*-
 """
-Blender + gmsh: freien Bereich eines Oberflächennetzes neu vernetzen
-=====================================================================
+Remesh the free region of a surface mesh just so that it has a more naturally distributed mesh complexity
+Mainly intended as a subscript for the geometrical heart reconstruction blender addon.
+Functions should work by itself.
 
-Für Blender 3.1 (Python 3.10). Anleitung und Erklärung des Ergebnisfensters
-stehen in README.md.
+Faces whose vertices all belong to one of the groups in VERTEX_GROUP
+are preserved exactly. The rest is remeshed with gmsh: the element size
+starts at the interface with the local boundary-edge length and grows by
+GROWTH per element row until it reaches TARGET_DISTANCE. Edge flips and
+shape-preserving smoothing follow. The result is a new object "<Name><NAME_SUFFIX>",
+while the original is only hidden.
 
-Flächen, deren Knoten alle in einer der Gruppen aus VERTEXGRUPPE liegen,
-bleiben exakt erhalten. Der Rest wird mit gmsh neu vernetzt: Die Elementgröße
-startet an der Schnittstelle mit der dortigen Randkantenlänge und wächst pro
-Elementreihe um WACHSTUM bis ZIELGROESSE. Danach folgen Kantenflips und eine
-formerhaltende Glättung. Ergebnis ist ein neues Objekt "<Name><NAME_ZUSATZ>",
-das Original wird nur ausgeblendet.
+Usage: Select an object, adjust the settings below, and just run the script on that object.
+remesh_object() can also be run on a script on objects for the same effect.
 
-Benutzung: Objekt wählen, Einstellungen unten anpassen, "Run Script".
-Beim ersten Lauf wird gmsh per pip in Blenders Python installiert.
 """
 
 # =============================================================================
-# EINSTELLUNGEN
+# SETTINGS
 # =============================================================================
 
-FESTE_FLAECHEN = "gruppe"  # "gruppe":  Flächen, deren Knoten alle in EINER
-                           #            der Gruppen aus VERTEXGRUPPE liegen
-                           # "auswahl": die im Edit Mode ausgewählten Flächen
-VERTEXGRUPPE = "AV","MV"   # Gruppe(n) der festen Flächen, z. B. ["MV", "AV"]
-FESTE_RAENDER = "alle"  # Offene Ränder (Edge-Loops), die knotengenau bleiben:
-                        #   "alle"   = alle bleiben unverändert
-                        #   ["lower_basal_edge_loop"] = nur Ränder in diesen
-                        #              Gruppen, alle anderen werden neu vernetzt
-                        #   [] oder "keine" = alle werden neu vernetzt
-                        # Neu vernetzte Ränder behalten Verlauf und Vertexgruppen.
-NAME_ZUSATZ = "_remesh" # Namenszusatz des neuen Objekts, z. B. "_A" oder "_B"
-ZIELGROESSE = None      # Kantenlänge weit weg von der Schnittstelle;
-                        # None = Median der Kanten im bisherigen freien Netz
-WACHSTUM = 1.2          # Größenzunahme pro Elementreihe (1.1 ... 1.3 üblich)
-KNICKWINKEL = 30.0      # Grad. Kanten mit stärkerem Knick bleiben erhalten
-KRUEMMUNG_ELEMENTE = 0  # > 0: zusätzlich nach Krümmung verfeinern
-                        # (Elemente pro Vollkreis, z. B. 24). 0 = aus
-GLAETTEN = 10           # Durchgänge aus Kantenflips und Glättung nach gmsh
-                        # (Form bleibt erhalten). 5 ... 30, 0 = aus
-FORM_GLAETTEN = 0       # zusätzlich die FORM glätten (3 ... 10 Schritte),
-                        # VERÄNDERT DIE GEOMETRIE leicht. 0 = aus
-NUR_GLAETTEN = False    # True: gmsh überspringen, nur das vorhandene Netz
-                        # nachbearbeiten
-ALGORITHMUS = 6         # gmsh-Verfahren: 6 = Frontal-Delaunay, 5 = Delaunay,
-                        # 1 = MeshAdapt (robust bei kniffligen Flächen)
-GMSH_INSTALLIEREN = True  # gmsh bei Bedarf automatisch per pip installieren
-AUSFUEHRLICH = False    # True: ausführliche gmsh-Ausgabe in der Systemkonsole
+FIXED_SURFACE = "gruppe"  # "gruppe":  To use all groups in VERTEX_GROUP
+                           # "selection": the faces selected in Edit Mode
+VERTEX_GROUP = "AV","MV"   # Group(s) for fixed faces, e.g. ["MV", "AV"]
+FIXED_BOUNDARIES = "all"  # Open boundaries (edge loops) that must remain vertex-exact:
+                        #   "all"   = all remain unchanged
+                        #   ["lower_basal_edge_loop"] = only boundaries in these groups; all others are remeshed
+                        #   [] or "none" = remesh all boundaries. Remeshed boundaries retain their shape and vertex groups.
+NAME_SUFFIX = "_remesh" # Suffix for the new object, e.g. "_A" or "_B"
+TARGET_DISTANCE = None      # Edge length far from the interface;
+                        # None = median edge length in the current free mesh
+GROWTH = 1.2          # Size increase per element row (1.1 ... 1.3 is typical)
+ANGLE = 30.0      # Degrees. Edges with a sharper crease are preserved
+CURVATURE = 0  #  0: additionally refine based on curvature(elements per full circle, e.g. 24). 0 = off
+SMOOTH = 10           # Passes of edge flips and smoothing after gmsh (Shape is preserved). 5 ... 30, 0 = off
+SHAPE_SMOOTH = 0       # also smooth the SHAPE (3 ... 10 steps) WARNING:SLIGHTLY CHANGES THE GEOMETRY. 0 = off
+SMOOTH_ONLY = False    # True: skip gmsh and only post-process the existing mesh
+ALGORITHM = 6         # gmsh algorithm: 6 = Frontal-Delaunay, 5 = Delaunay, 1 = MeshAdapt (robust for difficult surfaces)
+INSTALL_GMSH = True  # Automatically install gmsh via pip if needed
+VERBOSE = False    # True: verbose gmsh output in the system console
 
 # =============================================================================
 
@@ -62,21 +53,21 @@ import numpy as np
 try:
     import bpy
     import bmesh
-except ImportError:  # außerhalb von Blender, z. B. für Tests des Kerns
+except ImportError:  # outside Blender, e.g. for testing the core
     bpy = None
     bmesh = None
 
 
 class RemeshError(Exception):
-    """Fehler mit verständlicher Meldung für den Nutzer."""
+    """Error message"""
 
 
 # -----------------------------------------------------------------------------
-# gmsh laden bzw. installieren
+# Load or install gmsh
 # -----------------------------------------------------------------------------
 
 def _gmsh_search_dirs():
-    """Ordner, in denen pip gmsh.py abgelegt haben kann (auch mit --user)."""
+    """Directories where pip may have placed gmsh.py (including with --user)."""
     import site
     dirs = list(sys.path)
     try:
@@ -117,7 +108,7 @@ def _run_cmd(cmd):
     print("  >", " ".join(cmd))
     try:
         r = subprocess.run(cmd, capture_output=True, text=True)
-    except Exception as e:  # z. B. Python-Programm nicht gefunden
+    except Exception as e:  # e.g. Python executable not found
         print("   ", e)
         return False
     out = ((r.stdout or "") + (r.stderr or "")).strip()
@@ -127,12 +118,12 @@ def _run_cmd(cmd):
 
 
 def _try_import_gmsh():
-    """gmsh importieren. None, wenn nicht installiert; Fehler, wenn kaputt."""
+    """Import gmsh. Returns None if not installed; raises an error if broken."""
     try:
         import gmsh
     except ImportError:
         return None
-    except Exception as e:  # z. B. OSError beim Laden der Bibliothek
+    except Exception as e:  # e.g. OSError while loading the library
         raise RemeshError(_lib_error_text(e))
     try:
         getattr(gmsh.lib, "gmshInitialize")   # Bibliothek wirklich ladbar?
@@ -142,14 +133,14 @@ def _try_import_gmsh():
 
 
 def _lib_error_text(err):
-    return ("Die gmsh-Bibliothek konnte nicht geladen werden:\n%s\n"
-            "Unter Linux fehlen dafür oft Systembibliotheken, z. B.:\n"
+    return ("The gmsh library could not be loaded:\n%s\n"
+            "On Linux, required system libraries are often missing, e.g.:\n"
             "sudo apt install libglu1-mesa libxcursor1 libxft2 libxinerama1" % err)
 
 
 def import_gmsh(auto_install=True):
-    """gmsh-Modul importieren, bei Bedarf in Blenders Python installieren:
-    pip (notfalls erst per ensurepip einrichten), sonst pip --user."""
+    """Import the gmsh module; if necessary, install it into Blender’s Python:
+    pip (set it up first via ensurepip if needed), otherwise pip --user."""
     gmsh = _try_import_gmsh()
     if gmsh is None and _add_gmsh_to_path():
         gmsh = _try_import_gmsh()
@@ -158,20 +149,20 @@ def import_gmsh(auto_install=True):
 
     if not auto_install:
         raise RemeshError(
-            "gmsh ist nicht installiert. Setze GMSH_INSTALLIEREN = True oder "
-            "installiere es manuell:\n<Blenders Python> -m pip install gmsh")
+            "gmsh is not installed. Set INSTALL_GMSH = True or "
+            "install it manually:\n<Blenders Python> -m pip install gmsh")
 
     py = sys.executable
-    print("\ngmsh wird in Blenders Python installiert (%s) ..." % py)
+    print("\nInstalling gmsh in Blender’s Python (%s) ..." % py)
     if not _run_cmd([py, "-m", "pip", "--version"]):
         if not _run_cmd([py, "-m", "ensurepip", "--default-pip"]):
             _run_cmd([py, "-m", "ensurepip", "--user"])
     if not (_run_cmd([py, "-m", "pip", "install", "gmsh"])
             or _run_cmd([py, "-m", "pip", "install", "--user", "gmsh"])):
         raise RemeshError(
-            "Die Installation von gmsh ist fehlgeschlagen (Details in der "
-            "Systemkonsole). Unter Windows hilft es oft, Blender einmal als "
-            "Administrator zu starten und das Skript erneut auszuführen.")
+            "Installing gmsh failed (details in the "
+            "system console). On Windows, it often helps to start Blender once as "
+            "administrator and run the script again.")
 
     import importlib
     importlib.invalidate_caches()
@@ -179,18 +170,18 @@ def import_gmsh(auto_install=True):
     gmsh = _try_import_gmsh()
     if gmsh is None:
         raise RemeshError(
-            "gmsh wurde installiert, lässt sich aber noch nicht laden. "
-            "Bitte Blender neu starten und das Skript erneut ausführen.")
-    print("gmsh %s ist bereit." % getattr(gmsh, "__version__", "?"))
+            "gmsh was installed, but still cannot be loaded. "
+            "Please restart Blender and run the script again.")
+    print("gmsh %s is ready." % getattr(gmsh, "__version__", "?"))
     return gmsh
 
 
 # -----------------------------------------------------------------------------
-# Hilfsstrukturen (ohne Blender nutzbar)
+# Helper structures (usable without Blender)
 # -----------------------------------------------------------------------------
 
 class _KD:
-    """Punktsuche: in Blender mit mathutils.kdtree, sonst einfach mit numpy."""
+    """Point search: use mathutils.kdtree in Blender, otherwise use numpy."""
 
     def __init__(self, pts):
         self.pts = np.asarray(pts, dtype=np.float64).reshape(-1, 3)
@@ -205,7 +196,7 @@ class _KD:
         self.tree.balance()
 
     def nearest(self, q):
-        """(Index, Abstand) des nächsten Punkts."""
+        """(Index, distance) of the nearest point."""
         if self.tree is not None:
             _, i, d = self.tree.find(q)
             return int(i), float(d)
@@ -214,7 +205,7 @@ class _KD:
         return i, float(d[i])
 
     def within(self, q, r):
-        """Indizes aller Punkte im Abstand <= r."""
+        """Indices of all points within distance <= r."""
         if self.tree is not None:
             return np.fromiter((i for _, i, _ in self.tree.find_range(q, r)),
                                dtype=np.int64)
@@ -223,15 +214,15 @@ class _KD:
 
 
 class GradedSize:
-    """Größenfeld, das von der lokalen Randkantenlänge aus wächst.
+    """Size field that grows outward from the local boundary-edge length.
 
-    s(x) = min( min_i (h_i + g*d_i)  über Randknoten mit h_i <= hmax,
-                max(hmax, max_j (h_j - g*d_j))  über Randknoten mit h_j > hmax )
+    s(x) = min( min_i (h_i + g*d_i)  over boundary vertices with h_i <= hmax,
+                max(hmax, max_j (h_j - g*d_j))  over boundary vertices with h_j > hmax )
 
-    mit g = Wachstum - 1 und d = Abstand zum Randknoten. s ist am Rand gleich
-    der dortigen Kantenlänge, ändert sich mit höchstens g pro Längeneinheit
-    (d. h. Nachbarelemente unterscheiden sich um höchstens den Faktor
-    Wachstum) und geht weit weg vom Rand gegen hmax.
+    where g = GROWTH - 1 and d = distance to the boundary vertex. At the boundary, s equals
+    the local edge length and changes by at most g per unit of length
+    (i.e. neighboring elements differ by no more than a factor of
+    GROWTH), and approaches hmax far from the boundary.
     """
 
     def __init__(self, pts, h, growth, hmax):
@@ -269,7 +260,7 @@ class GradedSize:
 
 
 class _PointLookup:
-    """Findet Randknoten anhand ihrer Koordinaten (exakt, sonst mit Toleranz)."""
+    """Find boundary vertices by their coordinates (exact match, otherwise within tolerance)."""
 
     def __init__(self, pts, ids, tol):
         pts = np.asarray(pts, dtype=np.float64).reshape(-1, 3)
@@ -294,16 +285,16 @@ class _PointLookup:
 
 
 class _Edges:
-    """Kanten eines Dreiecksnetzes, einmal sortiert, alles daraus abgeleitet.
+    """Edges of a triangle mesh, sorted once; everything else is derived from this.
 
-    Halbkante 3k+j von Dreieck k läuft von T[k, j] nach T[k, (j+1) % 3].
+    Half-edge 3k+j of triangle k runs from T[k, j] to T[k, (j+1) % 3].
       E       (3t, 2)  Halbkanten (gerichtet)
-      code    (3t,)    Schlüssel der ungerichteten Kante: min * n + max
-      sign    (3t,)    +1, wenn die Halbkante von min nach max läuft
-      cnt     (3t,)    Anzahl Halbkanten mit diesem Schlüssel (1 = Rand)
-      e1, e2           Nachbarpaare: Halbkanten mit gleichem Schlüssel
-      unique  (k, 2)   ungerichtete Kanten, nach Schlüssel sortiert
-      ucode   (k,)     ihre Schlüssel
+      code    (3t,)    key of the undirected edge: min * n + max
+      sign    (3t,)    +1 if the half-edge runs from min to max
+      cnt     (3t,)    number of half-edges with this key (1 = boundary)
+      e1, e2           neighbor pairs: half-edges with the same key
+      unique  (k, 2)   undirected edges, sorted by key
+      ucode   (k,)     their keys
     """
 
     def __init__(self, T, n):
@@ -329,7 +320,7 @@ class _Edges:
 
     @property
     def boundary(self):
-        """Randkanten (gerichtet wie im Netz)."""
+        """Boundary edges (oriented as in the mesh)."""
         return self.E[self.cnt == 1]
 
 
@@ -354,9 +345,9 @@ def _areas(P, T):
 
 
 def quality(P, T):
-    """Kennzahlen eines Dreiecksnetzes: Anzahl, kleinster und mittlerer
-    kleinster Innenwinkel, Anteil < 30°, Größensprung zwischen Nachbarn
-    (Wurzel des Flächenverhältnisses, 95-%-Wert)."""
+    """Triangle-mesh metrics: count, minimum and mean
+    minimum interior angle, fraction < 30°, size jump between neighbors
+    (square root of the area ratio, 95th percentile)."""
     P = np.asarray(P, dtype=np.float64)
     T = np.asarray(T, dtype=np.int64)
     ang = _min_angles_deg(P, T)
@@ -378,11 +369,11 @@ def quality(P, T):
 
 
 # -----------------------------------------------------------------------------
-# Orientierung
+# Orientation
 # -----------------------------------------------------------------------------
 
 def _make_vote(P0, T0):
-    """Orientierung eines Netzteils per Vergleich mit den Originalnormalen."""
+    """Orientation of a mesh component by comparison with the original normals."""
     C0 = P0[T0].mean(axis=1)
     N0 = np.cross(P0[T0[:, 1]] - P0[T0[:, 0]], P0[T0[:, 2]] - P0[T0[:, 0]])
 
@@ -400,11 +391,11 @@ def _make_vote(P0, T0):
 
 
 def _orient(T, n, ref, vote):
-    """Alle Dreiecke konsistent orientieren.
+    """Orient all triangles consistently.
 
-    ref: Schlüssel einer festen Randkante -> +1/-1 (Richtung im Original).
-    vote: Funktion(Dreiecke) -> +1/-1, entscheidet für Teile ohne feste
-    Randkante. Rückgabe: (Dreiecke, {"conflicts", "parts_without_boundary"}).
+    ref: Schlüssel einer festen Randkante -> +1/-1 (direction in the original mesh).
+    vote: Funktion(Dreiecke) -> +1/-1, decides for components without a fixed
+    boundary edge. Returns: (triangles, {"conflicts", "parts_without_boundary"}).
     """
     T = np.asarray(T, dtype=np.int64)
     t = len(T)
@@ -482,7 +473,7 @@ def _gmsh_init(gmsh):
             gmsh.finalize()
     except Exception:
         pass
-    # ältere gmsh-Versionen kennen nicht alle Argumente
+    # Older gmsh versions do not support all arguments
     for kwargs in ({"readConfigFiles": False, "interruptible": False},
                    {"readConfigFiles": False}):
         try:
@@ -490,7 +481,7 @@ def _gmsh_init(gmsh):
             return
         except TypeError:
             continue
-    gmsh.initialize()   # letzter Versuch ohne Argumente
+    gmsh.initialize()   # last attempt without arguments
 
 
 def _run_gmsh(gmsh, P, T, lookup, size_fn, size_cap, feature_angle,
@@ -513,10 +504,10 @@ def _run_gmsh(gmsh, P, T, lookup, size_fn, size_cap, feature_angle,
         gmsh.model.mesh.addElementsByType(s0, 2, list(range(1, len(T) + 1)),
                                           (T + 1).ravel().tolist())
 
-        # In Teilflächen zerlegen, die sich jeweils mit einer Karte
-        # parametrisieren lassen; Kanten über dem Knickwinkel werden Kurven.
-        # split_curves: Randkurven an Knicken teilen, damit Ecken eines neu
-        # vernetzten Rands als Knoten erhalten bleiben
+        # Split into patches that can each be
+        # parameterized with a single chart; edges above the crease angle become curves.
+        # split_curves: Split boundary curves at creases so corners of a newly
+        # remeshed boundary remain as vertices
         curve_angle = math.radians(feature_angle) if split_curves else math.pi
         gmsh.model.mesh.classifySurfaces(math.radians(feature_angle), True, True,
                                          curve_angle)
@@ -527,8 +518,8 @@ def _run_gmsh(gmsh, P, T, lookup, size_fn, size_cap, feature_angle,
             if len(types):
                 surfaces.append(s)
 
-        # Kurven, die nur aus Schnittstellenknoten bestehen, bleiben diskret
-        # (ohne Parametrisierung) und werden deshalb nicht neu vernetzt.
+        # Curves consisting only of interface vertices remain discrete
+        # (without parameterization) and are therefore not remeshed.
         keep, remesh = [], []
         for _, cv in gmsh.model.getEntities(1):
             _, xyz, _ = gmsh.model.mesh.getNodes(1, cv, True, False)
@@ -570,12 +561,12 @@ def _run_gmsh(gmsh, P, T, lookup, size_fn, size_cap, feature_angle,
             types, _, ntags = gmsh.model.mesh.getElements(2, s)
             for ty, nt in zip(types, ntags):
                 if int(ty) != 2:
-                    raise RemeshError("gmsh hat unerwartete Elemente (Typ %d) "
+                    raise RemeshError("gmsh generated unexpected elements (type %d) "
                                       "erzeugt." % int(ty))
                 surf_tris[s] = np.asarray(nt, dtype=np.int64).reshape(-1, 3)
 
         if size_errors["n"]:
-            print("FEHLER im Größenfeld (%d Aufrufe), erster Fehler:\n%s"
+            print("ERROR in size field (%d calls), first error:\n%s"
                   % (size_errors["n"], size_errors["first"]))
         info = {"surfaces": len(surfaces), "kept_curves": len(keep),
                 "remeshed_curves": len(remesh), "size_errors": size_errors["n"],
@@ -590,12 +581,12 @@ def _run_gmsh(gmsh, P, T, lookup, size_fn, size_cap, feature_angle,
         if logging:
             try:
                 lines = [l for l in gmsh.logger.get() if l.strip()]
-                tail = "\nLetzte gmsh-Meldungen:\n" + "\n".join(lines[-12:])
+                tail = "\nLast gmsh messages:\n" + "\n".join(lines[-12:])
             except Exception:
                 pass
-        raise RemeshError("gmsh ist bei der Vernetzung abgebrochen: %s%s\n\n"
-                          "Tipps: KNICKWINKEL ändern (z. B. 30 oder 60), Netz "
-                          "vorher mit 'Merge by Distance' bereinigen."
+        raise RemeshError("gmsh aborted during remeshing: %s%s\n\n"
+                          "Tips: change ANGLE (e.g. 30 or 60), clean the mesh "
+                          "beforehand using 'Merge by Distance'."
                           % (e, tail))
     finally:
         if logging:
@@ -610,7 +601,7 @@ def _run_gmsh(gmsh, P, T, lookup, size_fn, size_cap, feature_angle,
 
 
 # -----------------------------------------------------------------------------
-# Nachbearbeitung: Kantenflips + Glättung (ohne Blender nutzbar)
+# Post-processing: edge flips + smoothing (usable without Blender)
 # -----------------------------------------------------------------------------
 
 def _tri_normals(P, T):
@@ -638,11 +629,11 @@ def _node_min(T, vals, n):
 
 
 def _sharp_edges(P, T, angle_deg):
-    """Scharfe Kanten (Knick größer als angle_deg) als Knotenpaare.
+    """Sharp edges (crease greater than angle_deg) as vertex pairs.
 
-    Die Normale eines sehr spitzen Dreiecks ist unzuverlässig. Ein Knick
-    zählt deshalb nur, wenn beide Dreiecke brauchbar sind (Winkel >= 10°)
-    oder die Knotennormalen der gegenüberliegenden Ecken ihn bestätigen."""
+    The normal of a very narrow triangle is unreliable. A crease
+    therefore counts only if both triangles are usable (angle >= 10°)
+    or the vertex normals at the opposite corners confirm it."""
     n = len(P)
     if len(T) < 2:
         return np.zeros((0, 2), dtype=np.int64)
@@ -662,8 +653,8 @@ def _sharp_edges(P, T, angle_deg):
 
 
 class _Segments:
-    """Menge von Strecken (A[i] -> B[i]); prüft, ob Punkte darauf liegen.
-    Toleranz: 1 % der Streckenlänge (Knoten von gmsh liegen exakt darauf)."""
+    """Collection of line segments (A[i] -> B[i]); checks whether points lie on them.
+    Tolerance: 1% of segment length (gmsh vertices lie exactly on them)."""
 
     def __init__(self, A, B, diag):
         self.A = np.asarray(A, dtype=np.float64).reshape(-1, 3)
@@ -676,7 +667,7 @@ class _Segments:
             self.r = 0.5 * float(L.max()) + float(self.tol.max())
 
     def locate(self, Q):
-        """Je Punkt: (liegt auf einer Strecke, Index der Strecke, Parameter t)."""
+        """For each point: (lies on a segment, segment index, parameter t)."""
         Q = np.asarray(Q, dtype=np.float64).reshape(-1, 3)
         ok = np.zeros(len(Q), dtype=bool)
         seg = np.full(len(Q), -1, dtype=np.int64)
@@ -708,7 +699,7 @@ def _diag(P):
 
 
 def _feature_lines(P_ref, T_ref, angle_deg):
-    """Scharfe Kanten der Referenzfläche als Strecken."""
+    """Sharp edges of the reference surface as line segments."""
     P_ref = np.asarray(P_ref, dtype=np.float64)
     E = _sharp_edges(P_ref, np.asarray(T_ref, dtype=np.int64), angle_deg)
     return _Segments(P_ref[E[:, 0]], P_ref[E[:, 1]], _diag(P_ref))
@@ -716,11 +707,11 @@ def _feature_lines(P_ref, T_ref, angle_deg):
 
 def _flip_round(P, T, max_dihedral_deg=20.0, eps_deg=0.1, feat=None,
                 features=None):
-    """Eine Runde Kantenflips: Kante tauschen, wenn der kleinste Winkel der
-    beiden Dreiecke größer wird (in der Ebene = Delaunay). Nur fast ebene
-    Paare, keine Randkanten, Knotenvalenz bleibt mindestens 3. Unabhängige
-    Flips (keine gemeinsamen Dreiecke) werden nach Gewinn geordnet
-    gleichzeitig ausgeführt. Rückgabe: (T, Anzahl Flips)."""
+    """One round of edge flips: swap an edge if the minimum angle of the
+    two triangles increases (in the plane = Delaunay). Only nearly planar
+    pairs, no boundary edges; vertex valence remains at least 3. Independent
+    flips (with no shared triangles) are sorted by improvement
+    and executed simultaneously. Returns: (T, number of flips)."""
     n, t = len(P), len(T)
     if t < 2:
         return T, 0
@@ -729,7 +720,7 @@ def _flip_round(P, T, max_dihedral_deg=20.0, eps_deg=0.1, feat=None,
     a, b = ed.E[:, 0], ed.E[:, 1]
     c = T[:, [2, 0, 1]].ravel()
     h1, h2 = ed.e1, ed.e2
-    keep = (a[h1] == b[h2]) & (b[h1] == a[h2])  # gegenläufig = konsistent
+    keep = (a[h1] == b[h2]) & (b[h1] == a[h2])  # opposite directions = consistent
     h1, h2 = h1[keep], h2[keep]
     if not len(h1):
         return T, 0
@@ -738,7 +729,7 @@ def _flip_round(P, T, max_dihedral_deg=20.0, eps_deg=0.1, feat=None,
 
     code_cd = np.minimum(cc, dd) * nn + np.maximum(cc, dd)
     pos = np.minimum(np.searchsorted(ed.ucode, code_cd), len(ed.ucode) - 1)
-    ok = (cc != dd) & (ed.ucode[pos] != code_cd)   # Diagonale c-d gibt es noch nicht
+    ok = (cc != dd) & (ed.ucode[pos] != code_cd)   # diagonal c-d does not exist yet
 
     deg = np.bincount(ed.unique.ravel(), minlength=n)
     ok &= (deg[u] > 3) & (deg[v] > 3)
@@ -751,10 +742,10 @@ def _flip_round(P, T, max_dihedral_deg=20.0, eps_deg=0.1, feat=None,
     N = _tri_normals(P, T)
     n3, n4 = _unit(_tri_normals(P, Tn1)), _unit(_tri_normals(P, Tn2))
     cmax = math.cos(math.radians(max_dihedral_deg))
-    # flächengewichtete Richtung des Paars (spitze Dreiecke zählen kaum)
+    # Area-weighted direction of the pair (narrow triangles contribute little)
     s = _unit(N[t1] + N[t2])
-    # Geometrie: Abstand der beiden Diagonalen = Formänderung durch den Flip.
-    # Nur nahezu ebene Vierecke tauschen (scharfe Kanten bleiben erhalten).
+    # Geometry: distance between the two diagonals = shape change caused by the flip.
+    # Swap only nearly planar quadrilaterals (sharp edges are preserved).
     d1 = P[v] - P[u]
     d2 = P[dd] - P[cc]
     cr = np.cross(d1, d2)
@@ -762,13 +753,13 @@ def _flip_round(P, T, max_dihedral_deg=20.0, eps_deg=0.1, feat=None,
     L = np.maximum(np.linalg.norm(d1, axis=1), np.linalg.norm(d2, axis=1))
     dev = np.abs(((P[cc] - P[u]) * cr).sum(axis=1))
     ok &= (crn > 1e-12 * L * L) & (dev <= 0.1 * L * crn)
-    # neue Dreiecke: nicht umgeklappt, höchstens max_dihedral_deg gekippt
+    # new triangles: not flipped over, tilted by at most max_dihedral_deg
     ok &= ((n3 * s).sum(axis=1) >= cmax) & ((n4 * s).sum(axis=1) >= cmax)
     ok &= (n3 * n4).sum(axis=1) >= cmax
     gain = new - old
     ok &= gain > eps_deg
-    # scharfe Kanten nie wegflippen und keine Abkürzung zwischen zwei
-    # Kantenknoten quer über die Fläche erzeugen
+    # Never flip away sharp edges or create a shortcut between two
+    # edge vertices across the surface
     if feat is not None and features is not None and features.count:
         for e_a, e_b, want_on in ((u, v, False), (cc, dd, True)):
             m = np.nonzero(ok & feat[e_a] & feat[e_b])[0]
@@ -805,8 +796,8 @@ def _flip_round(P, T, max_dihedral_deg=20.0, eps_deg=0.1, feat=None,
 
 
 def _laplace_step(P, T, movable, h, factor, tangential=True):
-    """Gewichteter Laplace-Schritt. Gewicht je Kante = 1 / Sollgröße, dadurch
-    bleibt die Gradierung erhalten (statt alles gleich groß zu ziehen)."""
+    """Weighted Laplace step. Weight per edge = 1 / target size, thereby
+    preserving the size gradation instead of making everything the same size."""
     n = len(P)
     E = _Edges(T, n).unique
     w = 2.0 / (h[E[:, 0]] + h[E[:, 1]])
@@ -826,19 +817,19 @@ def _laplace_step(P, T, movable, h, factor, tangential=True):
 
 
 def _guard(P_old, P_new, T, movable, check_angles=True, floor=35.0):
-    """Bewegungen zurücknehmen, die Dreiecke umklappen oder ein Dreieck
-    schlechter machen als das bisher schlechteste an seinen Ecken.
-    Damit kann der kleinste Winkel nie sinken."""
+    """Revert movements that flip triangles or make a triangle
+    worse than the worst triangle previously found at its vertices.
+    This ensures that the minimum angle can never decrease."""
     n = len(P_old)
     P_new = P_new.copy()
     n_old = _tri_normals(P_old, T)
-    # Dreiecke, die schon vorher falsch herum lagen, dürfen sich frei ändern
+    # Triangles that were already reversed may change freely
     ref_n = _vertex_normals(P_old, T)[T].sum(axis=1)
     ok_old = (n_old * ref_n).sum(axis=1) > 0
     if check_angles:
         loc_old = _node_min(T, _min_angles_deg(P_old, T), n)
-        # gute Dreiecke dürfen etwas schlechter werden, solange sie über
-        # 'floor' bleiben (floor >= bisher kleinster Winkel des ganzen Netzes)
+        # Good triangles may become slightly worse as long as they remain above
+        # 'floor' bleiben (floor >= the previous minimum angle of the entire mesh)
         tri_ref = np.minimum(loc_old[T].min(axis=1), floor)
     reverted = np.zeros(n, dtype=bool)
     while True:
@@ -856,8 +847,8 @@ def _guard(P_old, P_new, T, movable, check_angles=True, floor=35.0):
 
 
 def _closest_on_tris(p, a, b, c):
-    """Nächster Punkt auf den Dreiecken (a, b, c) zu p (Arrays (..., 3),
-    broadcastbar). Verfahren nach Ericson, 'Real-Time Collision Detection'."""
+    """Closest point on triangles (a, b, c) to p (arrays (..., 3),
+    broadcastable). Method from Ericson, 'Real-Time Collision Detection'."""
     ab, ac = b - a, c - a
     ap, bp, cp = p - a, p - b, p - c
     d1, d2 = (ab * ap).sum(-1), (ac * ap).sum(-1)
@@ -880,17 +871,17 @@ def _closest_on_tris(p, a, b, c):
             ((d3 >= 0) & (d4 <= d3), b),
             ((d1 <= 0) & (d2 <= 0), a),
         ]
-        # Fälle in umgekehrter Reihenfolge wie bei Ericson: der zuletzt
-        # geschriebene (bei Ericson zuerst geprüfte) passende Fall gewinnt
+        # Cases are processed in reverse order compared with Ericson: the last
+        # listed matching case (the first tested by Ericson) takes precedence
         for mask, val in cases:
             res[mask] = np.broadcast_to(val, shape)[mask]
     return res
 
 
 class _Projector:
-    """Projiziert Punkte auf die Referenzfläche: nächster Punkt, dessen
-    Dreieck in dieselbe Richtung zeigt. In Blender per BVH-Baum, sonst numpy
-    (alle Dreiecke durchsuchen, nur für Tests außerhalb von Blender)."""
+    """Project points onto the reference surface: the closest point whose
+    triangle faces the same direction. Use a BVH tree in Blender, otherwise numpy
+    (search all triangles; only for tests outside Blender)."""
 
     def __init__(self, P0, T0):
         self.P0 = np.asarray(P0, dtype=np.float64)
@@ -907,8 +898,8 @@ class _Projector:
             self.A, self.B, self.C = (self.P0[self.T0[:, k]] for k in range(3))
 
     def project(self, Q, N, radius):
-        """Rückgabe: (projizierte Punkte, ok je Punkt). Nicht projizierbare
-        Punkte bleiben, wo sie sind."""
+        """Returns: (projected points, ok flag per point). Points that cannot be projected
+        remain where they are."""
         Q = np.asarray(Q, dtype=np.float64).reshape(-1, 3)
         N = np.asarray(N, dtype=np.float64).reshape(-1, 3)
         if self.tree is not None:
@@ -925,8 +916,8 @@ class _Projector:
             if loc is not None and nor.dot(nv) > 0:
                 out[i] = tuple(loc)
                 continue
-            # nächstes Dreieck zeigt falsch herum (z. B. dünne Wand):
-            # im Umkreis r das nächste passende suchen
+            # the nearest triangle faces the wrong way (e.g. a thin wall):
+            # search for the nearest suitable one within radius r
             best = None
             for loc2, nor2, _, d2 in self.tree.find_nearest_range(q, r):
                 if nor2.dot(nv) > 0 and (best is None or d2 < best[1]):
@@ -958,14 +949,14 @@ class _Projector:
 
 def improve_mesh(P, T, fixed, P_ref, T_ref, h, iterations=10, feature_angle=40.0,
                  shape_steps=0, omega=0.5):
-    """Netz verbessern: abwechselnd Kantenflips und größengewichtete,
-    tangentiale Glättung; danach jeweils Rückprojektion auf die Referenzfläche.
+    """Improve the mesh: alternate edge flips and size-weighted,
+    tangential smoothing; after each step, project back onto the reference surface.
 
-    fixed: bool je Knoten (Schnittstelle), bleibt unverändert. Knoten auf
-    scharfen Kanten der Referenzfläche (> feature_angle) bleiben ebenfalls
-    stehen, und diese Kanten werden nie weggeflippt.
-    shape_steps > 0: vorher die Form mit Taubin-Glättung beruhigen
-    (verändert die Geometrie leicht).
+    fixed: bool per vertex (interface); these remain unchanged. Vertices on
+    sharp edges of the reference surface (> feature_angle) also remain
+    fixed, and these edges are never flipped away.
+    shape_steps > 0: first stabilize the shape with Taubin smoothing
+    (slightly changes the geometry).
     """
     P = np.array(P, dtype=np.float64)
     T = np.array(T, dtype=np.int64)
@@ -976,8 +967,8 @@ def improve_mesh(P, T, fixed, P_ref, T_ref, h, iterations=10, feature_angle=40.0
     info = {"smooth_iterations": 0, "flips": 0, "reverted": 0,
             "feature_nodes": 0, "sharp_edges": 0, "shape_steps": int(shape_steps)}
 
-    # scharfe Kanten aus der Referenzfläche (Original), nicht aus dem
-    # aktuellen Netz: so verschwinden sie nicht durch Flips oder Glättung
+    # Sharp edges from the reference surface (the original), not from the
+    # current mesh: this prevents them from disappearing due to flips or smoothing
     features = _feature_lines(P_ref, T_ref, feature_angle)
     on_feat = features.on_line(P)
     movable = ~fixed & ~on_feat
@@ -1008,7 +999,7 @@ def improve_mesh(P, T, fixed, P_ref, T_ref, h, iterations=10, feature_angle=40.0
     proj = _Projector(P_ref, T_ref)
     hmin = float(h.min()) if n else 0.0
     idx = np.nonzero(movable)[0]
-    # der kleinste Winkel des ganzen Netzes darf durch die Glättung nie sinken
+    # The minimum angle of the entire mesh must never decrease due to smoothing
     floor = max(35.0, float(_min_angles_deg(P, T).min())) if len(T) else 35.0
     for _ in range(int(iterations)):
         nf = flips()
@@ -1031,39 +1022,39 @@ def improve_mesh(P, T, fixed, P_ref, T_ref, h, iterations=10, feature_angle=40.0
 
 
 # -----------------------------------------------------------------------------
-# Kern: freien Bereich neu vernetzen (ohne Blender nutzbar)
+# Core: remesh the free region (usable without Blender)
 # -----------------------------------------------------------------------------
 
 def _check_result(T_out, n_out, ref, stage, expected=None):
-    """Mannigfaltigkeit und Rand prüfen.
+    """Check manifoldness and boundaries.
 
-    ref: {Schlüssel fester Randkante: Richtung}; diese Kanten müssen Rand
-    bleiben. expected: falls gegeben, muss die Randkantenmenge genau so sein.
-    Rückgabe: (falsch orientierte feste Kanten, Schlüssel der Randkanten,
-    Randkanten als Knotenpaare)."""
+    ref: {key of a fixed boundary edge: direction}; these edges must remain boundary edges
+    edges. expected: if provided, the set of boundary edges must match exactly.
+    Returns: (misoriented fixed edges, boundary-edge keys,
+    boundary edges as vertex pairs)."""
     ed = _Edges(T_out, n_out)
     if ed.nonmanifold:
-        raise RemeshError("Das Netz hat nach %s %d nicht-mannigfaltige Kanten."
+        raise RemeshError("The mesh has %d non-manifold edges after %s."
                           % (stage, ed.nonmanifold))
     bnd = ed.cnt == 1
     new_b = set(ed.code[bnd].tolist())
     if expected is not None:
         if new_b != expected:
-            raise RemeshError("Interner Fehler: Der Rand hat sich bei %s verändert."
+            raise RemeshError("Internal error: the boundary changed during %s."
                               % stage)
     else:
         missing = set(ref.keys()) - new_b
         if missing:
             raise RemeshError(
-                "Der Rand des Netzes stimmt nach %s nicht mit der Schnittstelle "
-                "überein (%d Kanten fehlen)." % (stage, len(missing)))
+                "The mesh boundary does not match the interface after %s "
+                "(%d edges are missing)." % (stage, len(missing)))
     e_dir = dict(zip(ed.code[bnd].tolist(), ed.sign[bnd].tolist()))
     wrong = sum(1 for k, r in ref.items() if e_dir.get(k) != r)
     return wrong, new_b, ed.E[bnd]
 
 
 def _boundary_components(bE, n):
-    """Zusammenhängende Randstücke: Komponenten-Nummer je Randkante."""
+    """Connected boundary segments: component number for each boundary edge."""
     parent = {}
 
     def find(a):
@@ -1084,12 +1075,12 @@ def _boundary_components(bE, n):
 
 
 def _split_boundary(bE_all, n, fixed_nodes):
-    """Randstücke in feste und neu zu vernetzende aufteilen.
+    """Split boundary segments into fixed and to-be-remeshed segments.
 
-    fixed_nodes None: alle Randstücke bleiben fest. Sonst bleibt ein Randstück
-    fest, wenn mindestens einer seiner Knoten fest ist (teilweise fest ->
-    ganz fest). Rückgabe: (fest je Randkante, fest je Randstück, Anzahl der
-    nur teilweise festen Randstücke)."""
+    fixed_nodes None: all boundary segments remain fixed. Otherwise, a segment remains fixed
+    if at least one of its vertices is fixed (partially fixed ->
+    entire segment fixed). Returns: (fixed per boundary edge, fixed per segment, number of
+    partially fixed boundary segments)."""
     if not len(bE_all):
         return np.zeros(0, dtype=bool), np.zeros(0, dtype=bool), 0
     comp = _boundary_components(bE_all, n)
@@ -1102,21 +1093,21 @@ def _split_boundary(bE_all, n, fixed_nodes):
     any_c = np.zeros(ncomp, dtype=bool)
     np.logical_and.at(all_c, comp, fn[bE_all[:, 0]] & fn[bE_all[:, 1]])
     np.logical_or.at(any_c, comp, fn[bE_all[:, 0]] | fn[bE_all[:, 1]])
-    comp_fixed = any_c          # (= all_c | any_c): teilweise fest -> ganz fest
+    comp_fixed = any_c          # (= all_c | any_c): partially fixed -> entirely fixed
     return comp_fixed[comp], comp_fixed, int((any_c & ~all_c).sum())
 
 
 def _size_field(P, E, bE, bverts, target_size, growth):
-    """Größenfeld aufbauen. E: alle Halbkanten, bE: feste Randkanten.
+    """Build the size field. E: all half-edges, bE: fixed boundary edges.
 
-    h_i je festem Randknoten = Mittel der anliegenden festen Randkanten.
-    Neu vernetzte Ränder sind keine Quelle.
-    Rückgabe: (size_fn, Obergrenze für gmsh, hmax, H oder None)."""
-    # typische Kantenlänge (Median ist robust gegen einzelne lange Fächerkanten)
+    h_i for each fixed boundary vertex = mean length of its adjacent fixed boundary edges.
+    Remeshed boundaries are not used as a source.
+    Returns: (size_fn, upper limit for gmsh, hmax, H or None)."""
+    # Typical edge length (the median is robust against individual long fan edges)
     h_typ = float(np.median(np.linalg.norm(P[E[:, 0]] - P[E[:, 1]], axis=1)))
     hmax = float(target_size) if target_size else h_typ
     if hmax <= 0:
-        raise RemeshError("ZIELGROESSE muss größer als 0 sein.")
+        raise RemeshError("TARGET_DISTANCE must be greater than 0.")
     if not len(bverts):
         return (lambda x, y, z: hmax), hmax, hmax, None
     n = len(P)
@@ -1133,18 +1124,18 @@ def _size_field(P, E, bE, bverts, target_size, growth):
 
 def _gmsh_remesh(gmsh, P, T, bverts, size_fn, size_cap, feature_angle,
                  curvature_elements, verbose, algorithm, split_curves):
-    """gmsh auf der normierten Geometrie laufen lassen und das Ergebnis
-    zurückrechnen. Rückgabe: (Knoten, Dreiecke, orig, info); orig ist je
-    neuem Knoten der Index des festen Originalknotens oder -1."""
+    """Run gmsh on normalized geometry and return the result
+    convert back. Returns: (vertices, triangles, orig, info); for each
+    new vertex, orig is the index of the corresponding original vertex or -1."""
     diag = _diag(P)
     lookup = _PointLookup(P[bverts], bverts, max(1e-9 * diag, 1e-12))
 
-    # gmsh begrenzt jede Elementgröße auf seine "charakteristische Länge".
-    # Über die API wird sie nie aus der Modellgröße berechnet und bleibt 1.0.
-    # Deshalb bekommt gmsh die Geometrie auf Diagonale 1 normiert (dann
-    # stimmen diese Grenze und gmshs interne Toleranzen); das Ergebnis wird
-    # danach zurückgerechnet. NICHT ENTFERNEN, sonst wird jede Größe > 1
-    # abgeschnitten und das Netz gleichmäßig.
+    # gmsh limits every element size to its "characteristic length".
+    # Through the API, it is never calculated from the model size and remains 1.0.
+    # Therefore, the geometry passed to gmsh is normalized to a diagonal of 1 (then
+    # this limit and gmsh’s internal tolerances are consistent); the result is
+    # converted back afterward. DO NOT REMOVE THIS, otherwise every size > 1
+    # is clipped and the mesh becomes uniform.
     c0 = 0.5 * (P.min(axis=0) + P.max(axis=0))
     sc = 1.0 / max(diag, 1e-300)
     Pn = (P - c0) * sc
@@ -1164,7 +1155,7 @@ def _gmsh_remesh(gmsh, P, T, bverts, size_fn, size_cap, feature_angle,
         raise RemeshError("gmsh hat keine Dreiecke erzeugt.")
     all_tris = np.concatenate(list(surf_tris.values()), axis=0)
 
-    # nur benutzte Knoten, Schnittstellenknoten über die Koordinaten zuordnen
+    # Keep only used vertices; match interface vertices by their coordinates
     used = np.unique(all_tris)
     order = np.argsort(node_tags)
     st = node_tags[order]
@@ -1175,21 +1166,21 @@ def _gmsh_remesh(gmsh, P, T, bverts, size_fn, size_cap, feature_angle,
     orig = lookup.find_many(out_P)
     is_old = orig >= 0
     if len(np.unique(orig[is_old])) != int(is_old.sum()):
-        raise RemeshError("Mehrere neue Knoten liegen auf demselben Randknoten.")
+        raise RemeshError("Multiple new vertices lie on the same boundary vertex.")
     missing = len(bverts) - int(is_old.sum())
     if missing:
         raise RemeshError(
-            "%d Knoten der Schnittstelle fehlen im neuen Netz. Der Anschluss an "
-            "die festen Flächen wäre nicht konform, deshalb wird abgebrochen."
+            "%d interface vertices are missing from the new mesh. The connection to "
+            "the fixed faces would not be conforming, so the operation is aborted."
             % missing)
     out_P[is_old] = P[orig[is_old]]          # Originalkoordinaten, bitgenau
     return out_P, np.searchsorted(used, all_tris), orig, info
 
 
 def _orient_like(P, T, out_P, out_T, orig, bE):
-    """Neues Netz wie das Original orientieren: über die festen Randkanten,
-    für Teile ohne festen Rand über die Normalen des Originals.
-    Rückgabe: (Dreiecke, Richtung der festen Randkanten, info)."""
+    """Orient the new mesh like the original: using the fixed boundary edges,
+    and for components without a fixed boundary, using the original normals.
+    Returns: (triangles, direction of fixed boundary edges, info)."""
     n_out = len(out_P)
     is_old = orig >= 0
     local_to_out = np.full(len(P), -1, dtype=np.int64)
@@ -1203,23 +1194,23 @@ def _orient_like(P, T, out_P, out_T, orig, bE):
 
 
 def _locate_new_boundary_nodes(P, bE_free, out_P, new_b):
-    """Neue Randknoten müssen auf den alten (neu vernetzten) Randkanten
-    liegen. Rückgabe: (Knoten, Originalknoten a, b, Parameter t) für die
-    Interpolation der Vertexgruppen."""
+    """New boundary vertices must lie on the old (remeshed) boundary edges
+    Returns: (vertices, original vertices a and b, parameter t) for
+    interpolating vertex groups."""
     if not len(new_b):
         return (np.zeros(0, dtype=np.int64),) * 3 + (np.zeros(0),)
     segs = _Segments(P[bE_free[:, 0]], P[bE_free[:, 1]], _diag(P))
     ok, sg, tt = segs.locate(out_P[new_b])
     if not ok.all():
         raise RemeshError(
-            "%d neue Randknoten liegen nicht auf dem ursprünglichen offenen Rand."
+            "%d new boundary vertices do not lie on the original open boundary."
             % int((~ok).sum()))
     return new_b, bE_free[sg, 0], bE_free[sg, 1], tt
 
 
 def _size_diagnostics(P, bverts, H, hmax, growth, out_P, out_T):
-    """Kennzahlen zum Größenverlauf: erwartete Übergangslänge, größter Abstand
-    zum festen Rand und tatsächliche Kantenlängen nah am Rand / weit weg."""
+    """Metrics for the size progression: expected transition length, maximum distance
+    to the fixed boundary, and actual edge lengths near the boundary / far away."""
     if H is None or not len(bverts):
         return {}
     g = max(float(growth) - 1.0, 1e-9)
@@ -1245,35 +1236,35 @@ def remesh_free_region(points, tris, target_size=None, growth=1.2,
                        gmsh=None, auto_install=True, smooth_iterations=10,
                        shape_smoothing=0, algorithm=6, use_gmsh=True,
                        fixed_nodes=None):
-    """Dreiecksnetz (points, tris) des freien Bereichs neu vernetzen.
+    """Remesh the triangle mesh (points, tris) of the free region.
 
-    fixed_nodes: bool je Knoten. None = alle Randknoten bleiben erhalten.
-        Sonst bleiben nur Randstücke erhalten, die feste Knoten enthalten;
-        die übrigen offenen Ränder werden neu vernetzt (gleicher Verlauf,
-        neue Knoten).
-    use_gmsh=False: nur die Nachbearbeitung (alle Randknoten bleiben).
+    fixed_nodes: bool per vertex. None = preserve all boundary vertices.
+        Otherwise, only boundary segments containing fixed vertices are preserved;
+        the remaining open boundaries are remeshed (same shape,
+        new vertices).
+    use_gmsh=False: only perform post-processing (all boundary vertices remain).
 
-    Rückgabe: dict mit
-      points  (k,3)  neue Knoten
-      tris    (t,3)  neue Dreiecke, wie das Original orientiert
-      orig    (k,)   Index des Originalknotens oder -1 für neue Knoten
-      src     (k,)   Herkunft für Vertexgruppen (Originalindex oder -1)
-      bnd_interp     neue Randknoten auf alten Randkanten: (Knoten, a, b, t)
-      before / gmsh / after  Qualitätskennzahlen (gmsh: None, wenn übersprungen)
-      info    Zusatzinfos
+    Returns a dict containing
+      points  (k,3)  new vertices
+      tris    (t,3)  new triangles, oriented like the original
+      orig    (k,)   original vertex index or -1 for new vertices
+      src     (k,)   source for vertex groups (original index or -1)
+      bnd_interp     new boundary vertices on old boundary edges: (vertex, a, b, t)
+      before / gmsh / after  quality metrics (gmsh: None if skipped)
+      info    additional information
     """
     P = np.ascontiguousarray(points, dtype=np.float64).reshape(-1, 3)
     T = np.ascontiguousarray(tris, dtype=np.int64).reshape(-1, 3)
     if len(T) == 0:
-        raise RemeshError("Der freie Bereich enthält keine Flächen.")
+        raise RemeshError("The free region contains no faces.")
     n = len(P)
 
-    # 1. Rand: feste Randkanten (Schnittstelle, feste Ränder) und freie
+    # 1. Boundary: fixed boundary edges (interface, fixed boundaries) and free edges
     ed = _Edges(T, n)
     if ed.nonmanifold:
         raise RemeshError(
-            "Der freie Bereich hat %d nicht-mannigfaltige Kanten (mehr als zwei "
-            "Flächen an einer Kante). Bitte zuerst bereinigen, z. B. mit "
+            "The free region has %d non-manifold edges (more than two "
+            "faces on an edge). Please clean this up first, e.g. using "
             "Select -> Select All by Trait -> Non Manifold." % ed.nonmanifold)
     bE_all = ed.boundary
     e_fixed, comp_fixed, n_mixed = _split_boundary(
@@ -1282,11 +1273,11 @@ def remesh_free_region(points, tris, target_size=None, growth=1.2,
     bverts = np.unique(bE)
     free_bverts = np.setdiff1d(np.unique(bE_free), bverts)
 
-    # 2. Größenfeld
+    # 2. Size field
     size_fn, size_cap, hmax, H = _size_field(P, ed.E, bE, bverts, target_size,
                                              growth)
 
-    # 3. gmsh (oder Netz unverändert übernehmen)
+    # 3. gmsh (or keep the mesh unchanged)
     if use_gmsh:
         gm = gmsh if gmsh is not None else import_gmsh(auto_install)
         out_P, out_T, orig, info = _gmsh_remesh(
@@ -1303,7 +1294,7 @@ def remesh_free_region(points, tris, target_size=None, growth=1.2,
     is_old = orig >= 0
     n_out = len(out_P)
 
-    # 4. Orientierung und Prüfungen
+    # 4. Orientation and checks
     out_T, ref, oinfo = _orient_like(P, T, out_P, out_T, orig, bE)
     info.update(oinfo)
     wrong, bset, bedges = _check_result(out_T, n_out, ref, "gmsh")
@@ -1314,7 +1305,7 @@ def remesh_free_region(points, tris, target_size=None, growth=1.2,
     bnd_interp = _locate_new_boundary_nodes(P, bE_free, out_P, new_b)
     q_gmsh = quality(out_P, out_T) if use_gmsh else None
 
-    # 5. Nachbearbeitung (alle Randknoten bleiben stehen)
+    # 5. Post-processing (all boundary vertices remain fixed)
     if smooth_iterations > 0 or shape_smoothing > 0:
         t0 = time.time()
         h_nodes = np.array([size_fn(*p) for p in out_P.tolist()], dtype=np.float64)
@@ -1324,11 +1315,11 @@ def remesh_free_region(points, tris, target_size=None, growth=1.2,
         sinfo["smooth_seconds"] = time.time() - t0
         info.update(sinfo)
         info["wrong_boundary_orientation"] = _check_result(
-            out_T, n_out, ref, "der Glättung", expected=bset)[0]
+            out_T, n_out, ref, "smoothing", expected=bset)[0]
         if not np.array_equal(out_P[is_old], P[orig[is_old]]):
-            raise RemeshError("Interner Fehler: Schnittstellenknoten wurden bewegt.")
+            raise RemeshError("Internal error: interface vertices were moved.")
 
-    # 6. Diagnose
+    # 6. Diagnostics
     info.update(_size_diagnostics(P, bverts, H, hmax, growth, out_P, out_T))
     info.update({"hmax": hmax,
                  "h_boundary_min": float(H.min()) if H is not None else float("nan"),
@@ -1347,14 +1338,14 @@ def remesh_free_region(points, tris, target_size=None, growth=1.2,
 
 
 def assemble_output(P, polys, fixed_face, mat, free_used, res):
-    """Feste Flächen + neue Dreiecke zu einem Netz zusammensetzen.
+    """Combine fixed faces and new triangles into a mesh.
 
-    P: (n,3) Originalknoten, polys: Knotenlisten aller Flächen, fixed_face:
-    bool je Fläche, mat: Materialindex je Fläche, free_used: globale
+    P: (n,3) original vertices, polys: vertex lists of all faces, fixed_face:
+    bool per face, mat: material index per face, free_used: global
     Knotenindizes des freien Bereichs (res['orig'] zeigt darauf).
-    Rückgabe: verts, faces, mats, Indizes der festen Knoten, Herkunft je
-    Knoten (globaler Originalindex oder -1) und Randinterpolation
-    (neuer Knoten, Original a, Original b, t).
+    Returns: verts, faces, mats, indices of fixed vertices, source for each
+    vertex (global original index or -1) and boundary interpolation
+    (new vertex, original a, original b, t).
     """
     P = np.asarray(P, dtype=np.float64)
     nv = len(P)
@@ -1386,8 +1377,8 @@ def assemble_output(P, polys, fixed_face, mat, free_used, res):
     mats = fixed_mats + [free_mat] * len(res["tris"])
     fixed_verts = np.unique(np.concatenate([old_to_out[p] for p in fixed_polys])) \
         if fixed_polys else np.zeros(0, dtype=np.int64)
-    # Herkunft der neuen Knoten (für Vertexgruppen); bei NUR_GLAETTEN behalten
-    # auch verschobene Knoten ihre Herkunft
+    # Source of new vertices (for vertex groups); with SMOOTH_ONLY,
+    # even moved vertices retain their source
     src = np.asarray(res.get("src", orig), dtype=np.int64)[~is_old]
     new_src = np.full(len(src), -1, dtype=np.int64)
     new_src[src >= 0] = free_used[src[src >= 0]]
@@ -1403,18 +1394,18 @@ def assemble_output(P, polys, fixed_face, mat, free_used, res):
 
 def report_lines(res, new_name=None, fixed_faces=None, group_stats=None,
                  only_smooth_note=False, scale_note=False):
-    """Alle Zeilen des Ergebnisfensters.
+    """All lines for the results window.
 
-    fixed_faces: (Anzahl, {Gruppe: Anzahl}) der übernommenen festen Flächen,
-    group_stats: {Gruppe: (vorher, nachher, davon neu zugeordnet)},
-    only_smooth_note / scale_note: Hinweise aus dem Blender-Teil."""
+    fixed_faces: (count, {group: count}) of preserved fixed faces,
+    group_stats: {group: (before, after, newly assigned)},
+    only_smooth_note / scale_note: notes from the Blender section."""
     i = res["info"]
     smoothed = i.get("smooth_iterations", 0) > 0 or i.get("shape_steps", 0) > 0
     stages = [("Original", res["before"])]
     if res.get("gmsh") is not None:
         stages.append(("gmsh", res["gmsh"]))
     if smoothed:
-        stages.append(("geglättet", res["after"]))
+        stages.append(("smoothed", res["after"]))
     elif res.get("gmsh") is None:
         stages.append(("neu", res["after"]))
 
@@ -1424,90 +1415,90 @@ def report_lines(res, new_name=None, fixed_faces=None, group_stats=None,
     lines = []
     if fixed_faces is not None:
         total, counts = fixed_faces
-        lines.append("Feste Flächen übernommen: %d (%s)" % (
+        lines.append("Fixed faces preserved: %d (%s)" % (
             total, ", ".join("%s %d" % kv for kv in counts.items())))
-        lines += ["Hinweis: Gruppe '%s' ergibt keine festen Flächen (enthält sie "
-                  "nur Knoten oder Kanten?)" % nm
+        lines += ["Note: group '%s' does not produce any fixed faces (does it contain only "
+                  "vertices or edges?)" % nm
                   for nm in reversed([nm for nm, c in counts.items() if c == 0])]
     if i.get("size_errors"):
-        lines.append("WARNUNG: Größenfeld %d-mal fehlgeschlagen, Netz ist deshalb "
-                     "gleichmäßig. Details in der Systemkonsole." % i["size_errors"])
+        lines.append("WARNING: size field failed %d times; the mesh is therefore "
+                     "uniform. See the system console for details." % i["size_errors"])
     lines += [
-        "Werte: " + " -> ".join(name for name, _ in stages),
-        row("Dreiecke im freien Bereich", "n", "%d"),
-        row("Kleinster Innenwinkel", "min_angle", "%.1f°"),
-        row("Mittlerer kleinster Winkel", "mean_min_angle", "%.1f°"),
-        row("Dreiecke mit Winkel < 30°", "below30", "%.1f", 100.0, " %"),
-        row("Größensprung Nachbardreiecke (95 %)", "ratio95", "%.2f"),
-        "Feste Randknoten (Schnittstelle, feste Ränder): %d unverändert"
+        "Values: " + " -> ".join(name for name, _ in stages),
+        row("Triangles in free region", "n", "%d"),
+        row("Minimum interior angle", "min_angle", "%.1f°"),
+        row("Mean minimum angle", "mean_min_angle", "%.1f°"),
+        row("Triangles with angle < 30°", "below30", "%.1f", 100.0, " %"),
+        row("Size jump between neighboring triangles (95%)", "ratio95", "%.2f"),
+        "Fixed boundary vertices (interface, fixed boundaries): %d unchanged"
         % i["boundary_nodes"],
     ]
     if i.get("bnd_comps_free"):
-        lines.append("Offene Ränder neu vernetzt: %d (Randknoten %d -> %d)"
+        lines.append("Open boundaries remeshed: %d (boundary vertices %d -> %d)"
                      % (i["bnd_comps_free"], i["bnd_free_nodes_before"],
                         i["bnd_free_nodes_after"]))
     if i.get("bnd_comps_mixed"):
-        lines.append("Hinweis: %d Rand/Ränder nur teilweise fest, bleiben ganz "
-                     "unverändert" % i["bnd_comps_mixed"])
+        lines.append("Note: %d boundary segment(s) only partially fixed; the entire segment remains "
+                     "unchanged" % i["bnd_comps_mixed"])
     if i["boundary_nodes"]:
-        lines.append("Randkanten %.4g ... %.4g, Zielgröße %.4g, Wachstum %.2f"
+        lines.append("Boundary edges %.4g ... %.4g, target size %.4g, growth %.2f"
                      % (i["h_boundary_min"], i["h_boundary_max"], i["hmax"],
                         i["growth"]))
         if "h_bnd_median" in i:
             m, Z = i["h_bnd_median"], i["hmax"]
-            lines.append("Größenverlauf: Rand (Median) %.4g -> Ziel %.4g, Übergang "
-                         "ca. %.4g lang; größter Abstand zum festen Rand %.4g"
+            lines.append("Size progression: boundary (median) %.4g -> target %.4g, transition "
+                         "approx. %.4g long; maximum distance to fixed boundary %.4g"
                          % (m, Z, i["transition_length"], i["dist_max"]))
-            lines.append("Ergebnis-Kantenlänge: nahe festem Rand %.4g, weit weg %.4g"
+            lines.append("Resulting edge length: near fixed boundary %.4g, far away %.4g"
                          % (i["edge_near"], i["edge_far"]))
             if Z < 1.5 * m:
-                lines.append("HINWEIS: Zielgröße ist kaum größer als die Randkanten. "
-                             "Für sichtbares Wachstum ZIELGROESSE = %.3g ... %.3g"
+                lines.append("NOTE: target size is barely larger than the boundary edges. "
+                             "For visible growth, set TARGET_DISTANCE = %.3g ... %.3g"
                              % (3 * m, 4 * m))
             elif i["transition_length"] > i["dist_max"]:
-                lines.append("HINWEIS: Übergang ist länger als der Abstand im Teil, "
-                             "die Zielgröße wird nicht erreicht (WACHSTUM erhöhen "
-                             "oder ZIELGROESSE senken)")
+                lines.append("NOTE: the transition is longer than the distance across the region; "
+                             "the target size will not be reached (increase GROWTH "
+                             "or reduce TARGET_DISTANCE)")
     else:
-        lines.append("Kein fester Rand: einheitliche Größe %.4g" % i["hmax"])
+        lines.append("No fixed boundary: uniform size %.4g" % i["hmax"])
     if i.get("gmsh_skipped"):
-        lines.append("gmsh übersprungen (NUR_GLAETTEN)")
+        lines.append("gmsh skipped (SMOOTH_ONLY)")
     else:
-        lines.append("gmsh %s: %d Teilflächen, %.1f s"
+        lines.append("gmsh %s: %d surfaces, %.1f s"
                      % (i.get("version", "?"), i["surfaces"], i["seconds"]))
     if smoothed:
-        txt = "Glättung: Durchgänge %d, Kantenflips %d, %.1f s" % (
+        txt = "Smoothing: passes %d, edge flips %d, %.1f s" % (
             i["smooth_iterations"], i["flips"], i.get("smooth_seconds", 0.0))
         if i.get("shape_steps"):
-            txt += ", Formglättung %d" % i["shape_steps"]
+            txt += ", Shape smoothing %d" % i["shape_steps"]
         lines.append(txt)
         if i.get("feature_nodes"):
-            lines.append("Knoten an scharfen Kanten festgehalten: %d"
+            lines.append("Vertices held fixed on sharp edges: %d"
                          % i["feature_nodes"])
     if i.get("conflicts"):
-        lines.append("Warnung: Orientierung nicht eindeutig (%d Kanten)"
+        lines.append("Warning: orientation is ambiguous (%d edges)"
                      % i["conflicts"])
     if new_name:
-        lines.append("Neues Objekt: %s" % new_name)
+        lines.append("New object: %s" % new_name)
     if only_smooth_note:
-        lines.append("Hinweis: bei NUR_GLAETTEN bleiben alle offenen Ränder "
-                     "unverändert")
+        lines.append("Note: with SMOOTH_ONLY, all open boundaries remain "
+                     "unchanged")
     if group_stats:
-        lines.append("Vertexgruppen übernommen: " + ", ".join(group_stats))
+        lines.append("Vertex groups preserved: " + ", ".join(group_stats))
         for name, (before, after, gained) in group_stats.items():
             if gained:
-                lines.append("Gruppe '%s': Rand neu vernetzt, jetzt %d Knoten "
-                             "(vorher %d)" % (name, after, before))
+                lines.append("Group '%s': boundary remeshed; now %d vertices "
+                             "(previously %d)" % (name, after, before))
             elif after < before:
-                lines.append("Hinweis: Gruppe '%s' verliert %d Knoten (lagen im "
-                             "neu vernetzten Bereich)" % (name, before - after))
+                lines.append("Note: group '%s' loses %d vertices (they were in the "
+                             "remeshed region)" % (name, before - after))
     if scale_note:
-        lines.append("Hinweis: Skalierung nicht angewendet, Längen sind lokal.")
+        lines.append("Note: object scale was not applied; lengths are local.")
     return lines
 
 
 # -----------------------------------------------------------------------------
-# Blender
+# Blender integration
 # -----------------------------------------------------------------------------
 
 def _as_list(x):
@@ -1519,14 +1510,14 @@ def _as_list(x):
 
 
 def _group_masks(obj, names, what):
-    """bool je Gruppe und Knoten: Knoten mit Gewicht > 0.5."""
+    """Boolean mask per group and vertex: vertices with weight > 0.5."""
     missing = [nm for nm in names if obj.vertex_groups.get(nm) is None]
     if missing:
         have = [g.name for g in obj.vertex_groups]
         raise RemeshError(
-            "Vertexgruppe(n) für %s nicht gefunden: %s\nVorhanden im Objekt '%s': %s"
+            "Vertex group(s) for %s not found: %s\nAvailable in object '%s': %s"
             % (what, ", ".join(missing), obj.name,
-               ", ".join(have) if have else "(keine)"))
+               ", ".join(have) if have else "(none)"))
     nv = len(obj.data.vertices)
     index = {obj.vertex_groups.get(nm).index: k for k, nm in enumerate(names)}
     masks = np.zeros((len(names), nv), dtype=bool)
@@ -1539,8 +1530,8 @@ def _group_masks(obj, names, what):
 
 
 def _read_mesh(obj, groups, mode="gruppe"):
-    """Knoten, Flächen, Materialien und feste Flächen lesen.
-    Eine Fläche ist fest, wenn alle ihre Knoten in EINER der Gruppen liegen."""
+    """Read vertices, faces, materials, and fixed faces.
+    A face is fixed if all its vertices belong to ONE of the groups."""
     me = obj.data
     nv = len(me.vertices)
     co = np.empty(nv * 3, dtype=np.float32)
@@ -1562,15 +1553,15 @@ def _read_mesh(obj, groups, mode="gruppe"):
         me.polygons.foreach_get("select", sel)
         if not sel.any():
             raise RemeshError(
-                "Keine Flächen ausgewählt. Bitte im Edit Mode die festen Flächen "
-                "auswählen (FESTE_FLAECHEN = 'auswahl').")
-        return P, polys, mat, sel, {"Auswahl": int(sel.sum())}
+                "No faces selected. Please select the fixed faces in Edit Mode "
+                "(FIXED_SURFACE = 'auswahl').")
+        return P, polys, mat, sel, {"Selection": int(sel.sum())}
 
     names = _as_list(groups)
     if not names:
-        raise RemeshError("VERTEXGRUPPE ist leer. Bitte mindestens eine Gruppe "
-                          "angeben, z. B. VERTEXGRUPPE = [\"MV\", \"AV\"].")
-    masks = _group_masks(obj, names, "die festen Flächen (VERTEXGRUPPE)")
+        raise RemeshError("VERTEX_GROUP is empty. Please specify at least one group "
+                          "angeben, z. B. VERTEX_GROUP = [\"MV\", \"AV\"].")
+    masks = _group_masks(obj, names, "the fixed faces (VERTEX_GROUP)")
     fixed_f = np.zeros(npoly, dtype=bool)
     counts = {}
     if npoly:
@@ -1602,10 +1593,10 @@ def _free_triangles(me, fixed_f):
 
 def _copy_vertex_groups(src, obj, vert_src, interp, extra_group=None,
                         extra_verts=()):
-    """Alle Vertexgruppen mit Gewichten auf die übernommenen Knoten kopieren.
-    Neue Knoten auf neu vernetzten Rändern bekommen eine Gruppe, wenn beide
-    Endknoten der alten Randkante darin liegen (Gewicht linear interpoliert).
-    Rückgabe: {Gruppe: (vorher, nachher, davon neu zugeordnet)}."""
+    """Copy all vertex groups and their weights to the preserved vertices.
+    New vertices on remeshed boundaries receive a group if both
+    endpoints of the original boundary edge belong to it (weight is linearly interpolated).
+    Returns: {group: (before, after, newly assigned)}."""
     names = [g.name for g in src.vertex_groups]
     weights = [dict() for _ in names]
     for v in src.data.vertices:
@@ -1650,7 +1641,7 @@ def _build_object(src, name, verts, faces, mats, n_fixed_faces, vert_src, interp
         me.materials.append(m)
     if len(me.materials):
         me.polygons.foreach_set("material_index", mats)
-    # feste Flächen ausgewählt lassen, damit ein zweiter Lauf direkt geht
+    # Keep fixed faces selected so a second run can be performed immediately
     sel = [True] * n_fixed_faces + [False] * (len(faces) - n_fixed_faces)
     me.polygons.foreach_set("select", sel)
     me.update()
@@ -1664,51 +1655,52 @@ def _build_object(src, name, verts, faces, mats, n_fixed_faces, vert_src, interp
 
 
 def _boundary_setting(fixed_boundaries):
-    """FESTE_RAENDER auswerten: (alle offenen Ränder fest?, Gruppennamen)."""
+    """Evaluate FIXED_BOUNDARIES: (keep all open boundaries fixed?, group names)."""
     fb = fixed_boundaries
-    if isinstance(fb, str) and fb.strip().lower() == "alle":
+    if isinstance(fb, str) and fb.strip().lower() == "all":
         return True, []
-    if isinstance(fb, str) and fb.strip().lower() == "keine":
+    if isinstance(fb, str) and fb.strip().lower() == "none":
         return False, []
     return False, _as_list(fb)
 
 
-def remesh_object(obj, group_name=VERTEXGRUPPE, target_size=ZIELGROESSE,
-                  growth=WACHSTUM, feature_angle=KNICKWINKEL,
-                  curvature_elements=KRUEMMUNG_ELEMENTE, verbose=AUSFUEHRLICH,
-                  mode=FESTE_FLAECHEN, smooth_iterations=GLAETTEN,
-                  shape_smoothing=FORM_GLAETTEN, only_smooth=NUR_GLAETTEN,
-                  algorithm=ALGORITHMUS, fixed_boundaries=FESTE_RAENDER,
-                  name_suffix=NAME_ZUSATZ):
-    """Aktives Objekt neu vernetzen. Rückgabe: (neues Objekt, Berichtszeilen)."""
+def remesh_object(obj, group_name=VERTEX_GROUP, target_size=TARGET_DISTANCE,
+                  growth=GROWTH, feature_angle=ANGLE,
+                  curvature_elements=CURVATURE, verbose=VERBOSE,
+                  mode=FIXED_SURFACE, smooth_iterations=SMOOTH,
+                  shape_smoothing=FORM_SMOOTH, only_smooth=SMOOTH_ONLY,
+                  algorithm=ALGORITHM, fixed_boundaries=FIXED_BOUNDARIES,
+                  name_suffix=NAME_SUFFIX):
+    """Remesh the active object. Returns: (new object, report lines)."""
+    print("This is the translated version")
     if obj is None or obj.type != 'MESH':
-        raise RemeshError("Bitte ein Mesh-Objekt auswählen (aktives Objekt).")
+        raise RemeshError("Please select a mesh object (active object).")
     if obj.mode != 'OBJECT':
         bpy.ops.object.mode_set(mode='OBJECT')
     if only_smooth and smooth_iterations <= 0 and shape_smoothing <= 0:
-        raise RemeshError("NUR_GLAETTEN ist an, aber GLAETTEN und FORM_GLAETTEN "
-                          "sind 0. Es gibt nichts zu tun.")
+        raise RemeshError("SMOOTH_ONLY is enabled, but SMOOTH and FORM_SMOOTH "
+                          "are 0. Nothing to do.")
 
-    # Gruppen der festen Ränder prüfen, bevor gmsh geladen wird
+    # Check fixed-boundary groups before loading gmsh
     keep_all_bnd, bnd_names = _boundary_setting(fixed_boundaries)
-    bnd_masks = _group_masks(obj, bnd_names, "die festen Ränder (FESTE_RAENDER)") \
+    bnd_masks = _group_masks(obj, bnd_names, "the fixed boundaries (FIXED_BOUNDARIES)") \
         if bnd_names else None
 
     P, polys, mat, fixed_f, counts = _read_mesh(obj, group_name, mode)
     if fixed_f.all():
-        raise RemeshError("Alle Flächen sind fest, es gibt nichts zu vernetzen.")
+        raise RemeshError("All faces are fixed; there is nothing to remesh.")
 
-    # gmsh vor der eigentlichen Arbeit laden, damit Fehler früh kommen
-    gmsh = None if only_smooth else import_gmsh(GMSH_INSTALLIEREN)
+    # Load gmsh before starting the actual work so errors are caught early
+    gmsh = None if only_smooth else import_gmsh(INSTALL_GMSH)
 
     if not fixed_f.any():
-        print("Hinweis: keine festen Flächen gefunden, das ganze Netz wird "
-              "neu vernetzt.")
+        print("Note: no fixed faces found; the entire mesh will be "
+              "remeshed.")
     free_T_global = _free_triangles(obj.data, fixed_f)
     free_used = np.unique(free_T_global)
     free_T = np.searchsorted(free_used, free_T_global)
 
-    # feste Knoten für die offenen Ränder: Knoten fester Flächen + Randgruppen
+    # Fixed vertices for open boundaries: vertices of fixed faces + boundary groups
     if keep_all_bnd or only_smooth:
         fixed_nodes = None
     else:
@@ -1769,13 +1761,13 @@ def main():
     except RemeshError as e:
         msg = str(e)
         print("\nREMESH ABGEBROCHEN:\n" + msg)
-        _popup(msg.splitlines()[:15], "Remesh abgebrochen", 'ERROR')
-    except Exception as e:  # unerwarteter Fehler: Details in der Konsole
+        _popup(msg.splitlines()[:15], "Remesh aborted", 'ERROR')
+    except Exception as e:  # unexpected error: see the console for details
         import traceback
         traceback.print_exc()
-        _popup(["Unerwarteter Fehler: %s" % e,
-                "Details stehen in der Systemkonsole."],
-               "Remesh abgebrochen", 'ERROR')
+        _popup(["Unexpected error: %s" % e,
+                "See the system console for details."],
+               "Remesh aborted", 'ERROR')
 
 
 if __name__ == "__main__" and bpy is not None:

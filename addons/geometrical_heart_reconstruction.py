@@ -36,7 +36,7 @@ from pathlib import Path
 
 from stl_plot import derive_ed_es_from_volume_curve, parseRunTimeVariables_unique, _connectivity_errors, compute_frame_volume_diff, format_volume_diff_lines
 from calculate_valve_diameters import main_calc_diameter, ValveInputError
-import blender_gmsh_remesh
+import gmsh_remesh
 
 try: # A broken settings log must never keep the addon from registering.
     import session_log
@@ -1306,8 +1306,8 @@ def update_value_for_translation(context, mitral_diff, aortic_diff):
     return True
 
 def gradual_remesh(context,obj):
-    """Wrapper function for remeshing from blender_gmsh_remesh module's remesh_object function. This time it replaces the object immediately""" 
-    blender_gmsh_remesh.remesh_object(obj,group_name=["AV","MV"], fixed_boundaries="keine", feature_angle=30, growth=1.2, algorithm=5)
+    """Wrapper function for remeshing from gmsh_remesh module's remesh_object function. This time it replaces the object immediately""" 
+    gmsh_remesh.remesh_object(obj,group_name=["AV","MV"], fixed_boundaries="keine", feature_angle=30, growth=1.2, algorithm=5)
     # Here the object is remeshed and a copy of it is saved with "_remesh" appended to the end
     obj_name = obj.name
     remesh_name = obj.name + "_remesh"
