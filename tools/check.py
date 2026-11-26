@@ -11,8 +11,8 @@ Enable the hook once per clone:  git config core.hooksPath .githooks
 4. T4: tools/test_load_settings.py (standard library);
 5. tools/blend_settings.py --self-test reads the settings and objects of GVR-Pipeline.blend;
 6. no undefined names (pyflakes through uv, skipped without uv);
-7. the staged changes add no private paths (network shares, Windows user folders, sandbox
-   paths) and no references to the untracked folders .private/ and reports/.
+7. the staged changes add no private paths (network shares except the loopback 127.0.0.1,
+   Windows user folders, sandbox paths) and no references to the untracked folders .private/ and reports/.
    Text files: added lines only. .blend files: strings that the HEAD version does not have.
 """
 import ast
@@ -26,8 +26,10 @@ ROOT = Path(__file__).resolve().parent.parent
 T3_PACKAGES = ["numpy", "pandas", "scipy", "matplotlib", "trimesh"]
 
 HOST = r"[A-Za-z0-9._$-]{2,}"
-# \\server\share as written (2 + 1 backslashes) or escaped in JSON/Python (4 + 2); "dir\\sub\\" is neither
-SHARE = rf"(?<!\\)(?:\\{{2}}{HOST}\\(?!\\)|\\{{4}}{HOST}\\{{2}}(?!\\))"
+# \\server\share as written (2 + 1 backslashes) or escaped in JSON/Python (4 + 2); "dir\\sub\\" is neither.
+# A share on the loopback 127.0.0.1 is this computer and tells nothing private (tests use it for UNC paths).
+LOOPBACK = r"(?!127\.0\.0\.1\\)"
+SHARE = rf"(?<!\\)(?:\\{{2}}{LOOPBACK}{HOST}\\(?!\\)|\\{{4}}{LOOPBACK}{HOST}\\{{2}}(?!\\))"
 PRIVATE = [
     ("network share", SHARE),
     ("Windows user folder", r"[A-Za-z]:[\\/]+Users[\\/]"),
