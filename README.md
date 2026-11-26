@@ -75,19 +75,25 @@ Video-tutorial: https://www.youtube.com/watch?v=0sduwcDeSm8 \
 Installation description: https://www.youtube.com/watch?v=cKEKuLW4oYE \
 → Open blend-file provided in the repository and follow the following steps.
 ## Load settings
-`Load settings` at the top of the File Management panel loads all settings of a case from an export, session or rotation log, so switching between cases or rebuilding a case needs no retyping. Pick the log in the file browser; it shows `*.json` files and starts in the case folder of the current `Import folder`. The pipeline writes three logs:
+`Load settings` at the top of the File Management panel loads the settings of a case from an export, session or rotation log, so switching between cases or rebuilding a case needs no retyping. Pick the log in the file browser; it shows `*.json` files and starts in the case folder of the current `Import folder`. The pipeline writes three logs:
 - **Export log:** `gvr_settings.json` in the `Export folder`, written by `Export ventricle`;
 - **Session log:** `Session_Logs/session_<date>_<time>.json` in the case folder (one level above the `Import folder`), kept up to date while Blender runs;
 - **Rotation log:** `rotated/gvr_rotation.json` in the `Import folder`, written by `Translate and rotate`.
 
-What is loaded, always all at once:
-- `Import folder`, `Export folder` and `Processed geometries`, each only if the folder exists on this computer;
+**Which case?** If the scene is not on the case of an export or session log already (also if it has no case), the window *Load settings: which case?* asks first. `OK` runs the selected choice; `Esc` or a click outside changes nothing.
+- *Switch to case '…'* (preselected if offered): the scene works on the case of the log from now on, with its folders and all its settings as listed below. No folder of the scene's old case stays.
+- *Stay in case '…'*: the scene keeps its folders, its landmarks and its valve sizes. The other settings (valve translation and angle, the 13 setup variables, the approach) come from the log as a starting point. Then run `Calculate valve sizes` for the scene's case; the window offers it as a button if the scene has an `Import folder`.
+
+On another computer the folders in the log are often not found, for example under another user folder or drive. Then the case is where the log lies: the case folder is one level above `Session_Logs` for a session log, and an export log lies in the `Export folder`. This case folder must have the same name as the one in the log, otherwise only *Stay* is offered: rename the folder or set the folders by hand. A folder outside the case folder that is not on this computer is set to `//` (not set); set it before you export, otherwise the export lands next to the .blend. A derived folder inside the folder of the .blend is written as `//…`.
+
+What *Switch* loads, all at once:
+- `Import folder`, `Export folder` and `Processed geometries`: as in the log if found on this computer, else in the case folder where the log lies; a folder inside the case folder is set even if it does not exist yet (`Export ventricle` creates it);
 - translation and angle of both valves, MV width, MV depth and AV diameter;
 - the 13 algorithm setup variables and the approach.
 
 What is not loaded: R_target and the valve area check tolerance (model parameters, the same for all cases; a different R_target in the log is reported), the values the pipeline steps compute themselves, the positions after the rotation, and the check boxes of the live comparison.
 
-The landmarks (basal, apex, septum) come from the rotation log in the `Import folder` of the loaded log, never from the rotation part of an export or session log and never from another case. After a fresh import, `Translate and rotate` then repeats the old rotation without picking nodes. Press it only after a fresh import, otherwise the geometry is rotated twice. Without a rotation log, or if the `Import folder` of the log is not found, pick the landmarks by hand. A rotation log chosen directly sets only the landmarks; the window warns if it is not in the current `Import folder`.
+The landmarks (basal, apex, septum) come from the rotation log in the `Import folder` of the log's case on this computer, also a derived one, never from the rotation part of an export or session log and never from another case. After a fresh import, `Translate and rotate` then repeats the old rotation without picking nodes. Press it only after a fresh import, otherwise the geometry is rotated twice. Without a rotation log in that `Import folder`, pick the landmarks by hand. A rotation log chosen directly never asks and sets only the landmarks; the window warns if it is not in the current `Import folder`.
 
 After loading, the window *Settings loaded* shows the case, the file, the kind of log, its date, what was kept and what is left to do. The console lists every changed value as `old -> new`. `OK` closes the window and leaves the steps for later. A broken or foreign file changes nothing, and `Ctrl+Z` undoes the whole load.
 

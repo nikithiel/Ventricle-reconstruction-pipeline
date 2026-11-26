@@ -1,7 +1,7 @@
 bl_info = {
     "name" : "Geometrical heart reconstrucion", 
     "author" : "Daniel Verhuelsdonk",
-    "version" : (2, 2),
+    "version" : (2, 3),
     "blender" : (3, 1, 0),
     "location" : "Operator Search",
     "description": "Panel and operators to geometrically reconstruct the upper heart shape",
@@ -2413,9 +2413,11 @@ class PANEL_Dev_tools(bpy.types.Panel):
 
 #----
 _loaded_plan = None  # The plan of the last 'Load settings', shown by the 'Settings loaded' window.
+_question = None  # The question of the last 'Load settings', asked by the window 'Load settings: which case?'.
+_choice_items = []  # Blender needs the texts of a dynamic enum kept referenced in Python, else it shows garbage.
 
 class MESH_OT_load_settings(bpy.types.Operator):
-    """Load all case settings from an export, session or rotation log (.json) into the scene"""
+    """Load the case settings from an export, session or rotation log (.json) into the scene. For a log of another case, a window asks first: switch to its case or stay in the scene's case"""
     bl_idname = 'heart.load_settings'
     bl_label = 'Load settings'
     bl_options = {'REGISTER', 'UNDO'}
@@ -2432,29 +2434,101 @@ class MESH_OT_load_settings(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
     def execute(self, context):
-        global _loaded_plan
+        global _question
         _cons_rule("Load settings")
-        scene = context.scene
-        current = {}
-        for name in scene_properties:
-            value = getattr(scene, name)
-            current[name] = value if isinstance(value, (str, bool, int, float)) else tuple(value) # Copy vectors before they change.
+        plan = _plan_load(self, context, self.filepath)
+        if plan is None:
+            return {'CANCELLED'}
+        if isinstance(plan, load_settings.Question):  # another case: the window asks first, nothing is set here
+            _question = plan
+            _choice_items[:] = [(c, plan.label(c), plan.tooltip(c)) for c in plan.choices]
+            cons_print("Asking which case: 'Switch' to the case of the log or 'Stay' in the case of the scene.")
+            bpy.ops.heart.load_settings_choice('INVOKE_DEFAULT')  # no report: a WARNING would open a second popup
+            return {'FINISHED'}
+        _apply_plan(self, context, plan)
+        return {'FINISHED'}
+
+def _plan_load(op, context, path, choice=None):
+    """plan_load() with the current scene values; None after reporting a broken or foreign file."""
+    current = {}
+    for name in scene_properties:
+        value = getattr(context.scene, name)
+        current[name] = value if isinstance(value, (str, bool, int, float)) else tuple(value) # Copy vectors before they change.
+    try:
+        return load_settings.plan_load(path, current, bpy.path.abspath, choice)
+    except load_settings.SettingsLogError as err:
+        msg = f"Load settings: nothing changed, '{path}' cannot be loaded: {err}"
+        cons_print(msg)
+        op.report({'ERROR'}, msg)
+        return None
+
+def _apply_plan(op, context, plan):
+    """Set the planned values, then show the console lines, the status line and the window 'Settings loaded'."""
+    global _loaded_plan
+    for name, value in plan.values.items():
+        setattr(context.scene, name, value)
+    for line in plan.console_lines():
+        cons_print(line)
+    op.report({'INFO'}, plan.status())  # a WARNING would open a second popup over the window
+    _loaded_plan = plan
+    bpy.ops.heart.settings_loaded('INVOKE_DEFAULT')
+
+class MESH_OT_load_settings_choice(bpy.types.Operator):
+    """Ask whether to switch to the case of the loaded log or to stay in the case of the scene"""
+    bl_idname = 'heart.load_settings_choice'
+    bl_label = 'Load settings: which case?'
+    # No REGISTER: 'Adjust Last Operation' would show the choice and load again on a change there.
+    # UNDO: the values are set only here, so one Ctrl+Z brings back the state before loading.
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    choice: bpy.props.EnumProperty(items=lambda self, context: _choice_items)  # drawn one by one with prop_enum
+
+    def invoke(self, context, event):
+        if _question is None:
+            return {'CANCELLED'}
+        self.choice = _question.default  # a dynamic enum takes no default text
+        return context.window_manager.invoke_props_dialog(self, width=600)
+
+    def draw(self, context):
+        layout = self.layout
+        q = _question
+        if q is None:
+            return
+        for line in q.lines():
+            for part in textwrap.wrap(line, 80, break_on_hyphens=False):  # keep a folder like Ventricle-reconstruction-pipeline whole
+                layout.label(text=part)
+        layout.separator()
+        for choice in (load_settings.SWITCH, load_settings.STAY):
+            if choice not in q.choices:
+                for i, part in enumerate(textwrap.wrap(q.reason or "", 80, break_on_hyphens=False)):
+                    layout.label(text=part, icon='ERROR' if i == 0 else 'BLANK1')
+                continue
+            layout.prop_enum(self, "choice", choice)  # one by one, so each explanation stands under its choice
+            for line in q.explanation(choice):
+                layout.label(text=line, icon='BLANK1')
+            if choice == load_settings.SWITCH:
+                for label, folder in q.switch_folders:
+                    split = layout.split(factor=0.3)
+                    split.label(text=label, icon='BLANK1')
+                    split.label(text=folder)
+        layout.separator()
+        layout.label(text="OK runs the selected choice. Esc or a click outside: nothing changes.")
+
+    def execute(self, context):
+        global _question
+        q, _question = _question, None
+        if q is None:
+            return {'CANCELLED'}
         try:
-            plan = load_settings.plan_load(self.filepath, current, bpy.path.abspath)
-        except load_settings.SettingsLogError as err:
-            msg = f"Load settings: nothing changed, '{self.filepath}' cannot be loaded: {err}"
+            plan = _plan_load(self, context, q.path, self.choice)
+        except ValueError:  # the choice is no longer offered: folders appeared or vanished while the window was open
+            msg = "Load settings: nothing changed, the folders changed while the window was open: load again."
             cons_print(msg)
             self.report({'ERROR'}, msg)
             return {'CANCELLED'}
-
-        for name, value in plan.values.items():
-            setattr(scene, name, value)
-
-        for line in plan.console_lines():
-            cons_print(line)
-        self.report({'INFO'}, plan.status())  # a WARNING would open a second popup over the window
-        _loaded_plan = plan
-        bpy.ops.heart.settings_loaded('INVOKE_DEFAULT')
+        if plan is None:
+            return {'CANCELLED'}
+        _apply_plan(self, context, plan)  # Blender closed the dialog before execute, so 'Settings loaded' can open
         return {'FINISHED'}
 
 class MESH_OT_settings_loaded(bpy.types.Operator):
@@ -3362,7 +3436,7 @@ def BvH_transform(source,target):
             v.co = source.matrix_world.inverted() @ loc
     
 classes = [
-    PANEL_Files, MESH_OT_load_settings, MESH_OT_settings_loaded, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
+    PANEL_Files, MESH_OT_load_settings, MESH_OT_load_settings_choice, MESH_OT_settings_loaded, MESH_OT_export_ventricle, MESH_OT_import_ventricle, PANEL_Position_Ventricle, MESH_OT_quick_reset, MESH_OT_ApproachSelection,
     PANEL_Valves, PANEL_Pipeline, PANEL_Setup_Variables, MESH_OT_get_node, MESH_OT_ventricle_rotate, MESH_OT_build_valves, MESH_OT_support_struct, 
     MESH_OT_Ventricle_Sort, MESH_OT_Quick_Recon, MESH_OT_remove_basal,
     MESH_OT_create_basal, MESH_OT_connect_apical_and_basal, MESH_OT_Ventricle_Interpolation, MESH_OT_Add_Vessels_Valves, MESH_OT_check_node_connectivity,
