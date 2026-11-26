@@ -312,9 +312,6 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         shift_mitral = pos_matrix_mitral[i] - pos_matrix_mitral[ref_id]
         
         translate_mesh_object(context, source_copy, shift= (0,0,0), group=None, return_to_object=False)
-        #translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral + shift_aortic), group=None, return_to_object=False)
-        #translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral - shift_aortic), group="MV", return_to_object=False)
-        #translate_mesh_object(context, source_copy, shift= 0.5 * (-shift_mitral + shift_aortic), group="AV", return_to_object = False)
         
         # Experimental mesh shift
         translate_mesh_object(context, source_copy, shift= 0.5 * (shift_mitral + shift_aortic), group=None, return_to_object=False)
@@ -327,7 +324,6 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
         ll_z_shift = get_min_max_z(target,0)[1] + get_min_max_z(target,0)[0] - get_min_max_z(source_copy,0)[1] - get_min_max_z(source_copy,0)[0]
         
         lower_loop_shift = [0.5 * ll_x_shift, 0.5* ll_y_shift, 0.5 * ll_z_shift] # Calcs the difference between the lowest points between source and target
-        #translate_mesh_object(context, source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', return_to_object=False)
         gradual_mesh_translate(source_copy, shift=lower_loop_shift, group='lower_basal_edge_loop', max_dist = 3)
         
         ### --- After position is moved to overlap as much as possible, the morphing is performed --- ###
@@ -366,9 +362,6 @@ def shift_shrinkwrap_topology(context, source, target, shift = None, shrinkwrap=
     modifier.offset = offset
     modifier.wrap_method = shrinkwrap
     modifier.vertex_group = group
-    if group =="fullbody": # Extra settings for when morphing entire bodies
-        modifier.use_negative_direction = True
-        modifier.use_positive_direction = True
     if shrinkwrap == 'PROJECT': # If it's using project modifier, also refer to the axis parameter to decide what axis to use
         modifier.use_project_x = use_axis[0]
         modifier.use_project_y = use_axis[1]
@@ -2043,39 +2036,6 @@ def smooth_connection_and_basal_region(context, obj, smoothing_iter_factor):
     bm.to_mesh(obj.data)
     bm.free()
 
-def subdivide_vertex_group(context, obj, groups=[], cuts=1):
-    bpy.context.view_layer.objects.active = obj # Set object as active
-    if obj.mode != "EDIT": # If not edit mode, go edit mode
-        bpy.ops.object.mode_set(mode="EDIT")
-
-    #WIP
-    #bpy.ops.mesh.select_more()
-    bm = bmesh.from_edit_mesh(obj.data)
-    
-    
-    if groups == []: # If no group, selects all the edge 
-        #bpy.ops.mesh.select_all(action="DESELECT")
-        selected_edges = [edge for edge in bm.edges]
-    else: # Else selects all edges that is adjacent to a selected vertex
-        for group in groups: 
-            bpy.ops.object.vertex_group_set_active(group=group)
-            
-        selected_edges = [edge for edge in bm.edges if all(v.select for v in edge.verts)]
-
-    # Perform subdivision on the selected edges
-    bmesh.ops.subdivide_edges(
-            bm,
-            smooth=0,
-            edges = selected_edges,
-            cuts=cuts,
-            use_grid_fill=True
-        )
-
-    #bmesh.update_edit_mesh(obj.data)
-    obj.data.update()
-    bpy.ops.Object.mode_set(mode="OBJECT")
-    return True
-
 class MESH_OT_Ventricle_Sort(bpy.types.Operator): 
     """Sort ventricles by volume starting with ESV"""
     bl_idname = 'heart.sort_ventricles'
@@ -3684,7 +3644,6 @@ def write_ventricle_connectivity(objects, connectivity_dir, triangulate=True, st
 
     return True
 
-from mathutils.bvhtree import BVHTree
 def export_object_to_stl(obj, filepath, depsgraph=None):
     """Custom ASCII STL export for a single object."""
     if depsgraph is None:
