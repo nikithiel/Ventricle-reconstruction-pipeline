@@ -294,7 +294,7 @@ def shift_shrinkwrap_topology_batch(context, matrices=None, selected_names=[]):
                           bpy.data.objects.get(selected_names[i]), 
                           exclude_groups=["AV","MV"],
                           name="body_and_loop")     
-    if context.scene.basal_ref < len(selected_names) - 1:
+    if context.scene.basal_ref < len(selected_names):
         ref_id = context.scene.basal_ref
     else:
         cons_print(f"Frame {context.scene.basal_ref} does not exist. Defaulting to using frame 0")
@@ -1307,7 +1307,7 @@ def update_value_for_translation(context, mitral_diff, aortic_diff):
 
 def gradual_remesh(context,obj):
     """Wrapper function for remeshing from gmsh_remesh module's remesh_object function. This time it replaces the object immediately""" 
-    gmsh_remesh.remesh_object(obj,group_name=["AV","MV"], fixed_boundaries="keine", feature_angle=30, growth=1.2, algorithm=5)
+    gmsh_remesh.remesh_object(obj,group_name=["AV","MV"], fixed_boundaries="none", feature_angle=30, growth=1.2, algorithm=5)
     # Here the object is remeshed and a copy of it is saved with "_remesh" appended to the end
     obj_name = obj.name
     remesh_name = obj.name + "_remesh"
@@ -1328,7 +1328,7 @@ class MESH_OT_create_basal(bpy.types.Operator):
         # Subdivide the first object before morphing
         obj = bpy.data.objects.get(selected_names[context.scene.basal_ref])
         
-        obj = bpy.data.objects.get(selected_names[context.scene.basal_ref]) # Only performs gradual-remesh on the reference object. Otherwise it's really heavy
+        obj = bpy.data.objects.get(selected_names[context.scene.basal_ref]) # Only performs gradual-remesh on the reference object.
         gradual_remesh(context,obj)
         # Performs the gradual remeshing
         for i in range(0,len(selected_names)):

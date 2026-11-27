@@ -34,7 +34,7 @@ GROWTH = 1.2          # Size increase per element row (1.1 ... 1.3 is typical)
 ANGLE = 30.0      # Degrees. Edges with a sharper crease are preserved
 CURVATURE = 0  #  0: additionally refine based on curvature(elements per full circle, e.g. 24). 0 = off
 SMOOTH = 10           # Passes of edge flips and smoothing after gmsh (Shape is preserved). 5 ... 30, 0 = off
-SHAPE_SMOOTH = 0       # also smooth the SHAPE (3 ... 10 steps) WARNING:SLIGHTLY CHANGES THE GEOMETRY. 0 = off
+FORM_SMOOTH = 0       # also smooth the SHAPE (3 ... 10 steps) WARNING:SLIGHTLY CHANGES THE GEOMETRY. 0 = off
 SMOOTH_ONLY = False    # True: skip gmsh and only post-process the existing mesh
 ALGORITHM = 6         # gmsh algorithm: 6 = Frontal-Delaunay, 5 = Delaunay, 1 = MeshAdapt (robust for difficult surfaces)
 INSTALL_GMSH = True  # Automatically install gmsh via pip if needed
@@ -1672,7 +1672,7 @@ def remesh_object(obj, group_name=VERTEX_GROUP, target_size=TARGET_DISTANCE,
                   algorithm=ALGORITHM, fixed_boundaries=FIXED_BOUNDARIES,
                   name_suffix=NAME_SUFFIX):
     """Remesh the active object. Returns: (new object, report lines)."""
-    print("This is the translated version")
+    print("This is the translated version!!!")
     if obj is None or obj.type != 'MESH':
         raise RemeshError("Please select a mesh object (active object).")
     if obj.mode != 'OBJECT':
