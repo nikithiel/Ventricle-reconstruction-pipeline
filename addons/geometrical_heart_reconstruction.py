@@ -2496,7 +2496,7 @@ class MESH_OT_load_settings_choice(bpy.types.Operator):
             return {'CANCELLED'}
         self.choice = _question.default  # a dynamic enum takes no default text
         _mouse_to_middle(context)
-        return context.window_manager.invoke_props_dialog(self, width=600)
+        return context.window_manager.invoke_props_dialog(self, width=800)  # room for long folder paths under Switch
 
     def draw(self, context):
         layout = self.layout
