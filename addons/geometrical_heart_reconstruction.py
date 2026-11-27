@@ -2467,11 +2467,19 @@ def _apply_plan(op, context, plan):
     global _loaded_plan
     for name, value in plan.values.items():
         setattr(context.scene, name, value)
+    for window in context.window_manager.windows:  # setting from Python does not redraw the panels
+        for area in window.screen.areas:
+            area.tag_redraw()
     for line in plan.console_lines():
         cons_print(line)
     op.report({'INFO'}, plan.status())  # a WARNING would open a second popup over the window
     _loaded_plan = plan
     bpy.ops.heart.settings_loaded('INVOKE_DEFAULT')
+
+def _mouse_to_middle(context):
+    """Blender 3.1 opens a dialog hanging down from the mouse and takes no position: move the mouse first."""
+    window = context.window
+    window.cursor_warp(window.width // 2, window.height * 3 // 4)  # the dialog then sits about in the middle
 
 class MESH_OT_load_settings_choice(bpy.types.Operator):
     """Ask whether to switch to the case of the loaded log or to stay in the case of the scene"""
@@ -2487,6 +2495,7 @@ class MESH_OT_load_settings_choice(bpy.types.Operator):
         if _question is None:
             return {'CANCELLED'}
         self.choice = _question.default  # a dynamic enum takes no default text
+        _mouse_to_middle(context)
         return context.window_manager.invoke_props_dialog(self, width=600)
 
     def draw(self, context):
@@ -2539,6 +2548,7 @@ class MESH_OT_settings_loaded(bpy.types.Operator):
 
     def invoke(self, context, event):
         # Blender 3.1 dialogs have a fixed 'OK' button (no confirm_text before 4.1): OK means 'not now'.
+        _mouse_to_middle(context)
         return context.window_manager.invoke_props_dialog(self, width=600)
 
     def draw(self, context):
